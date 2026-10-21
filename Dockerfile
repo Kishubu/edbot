@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     chromium \
     dbus \
+    dbus-x11 \
     gosu \
     ca-certificates \
     fonts-liberation \

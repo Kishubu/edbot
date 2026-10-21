@@ -1,9 +1,10 @@
 #!/bin/sh
 set -e
 
-# --- Démarrer dbus (requis par Chromium/Puppeteer dans Docker, doit être root) ---
-mkdir -p /run/dbus
-dbus-daemon --system 2>/dev/null || true
+# --- Créer un session bus dbus accessible (requis par Chromium/Puppeteer) ---
+dbus-daemon --session --fork --address=unix:path=/tmp/dbus-session 2>/dev/null || true
+chmod 777 /tmp/dbus-session 2>/dev/null || true
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session
 
 # --- Corrections de permissions au démarrage (root) ---
 if [ -d /app/.wwebjs_auth ]; then
