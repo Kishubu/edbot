@@ -39,6 +39,14 @@ const client = new Client({
     // et donc l'evenement 'ready' (le client reste bloque a 99% de chargement).
     // On aligne l'UA sur le Chromium reellement installe dans l'image.
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
+    // Le cache web local ecrit dans './.wwebjs_cache/' relatif au CWD (/app),
+    // qui appartient a root : l'ecriture echoue en EACCES et interrompt inject()
+    // AVANT l'injection de window.WWebJS, donc l'evenement 'ready' n'est jamais
+    // emis (sans message d'erreur). On impose un chemin inscriptible.
+    webVersionCache: {
+        type: 'local',
+        path: path.join(APP_DIR, '.wwebjs_cache')
+    },
     puppeteer: {
         headless: true,
         executablePath: '/usr/bin/chromium',
@@ -222,6 +230,22 @@ client.on('disconnected', (reason) => {
     console.log('[WA] Deconnecte :', reason);
 });
 
-client.initialize();
+client.on('error', (err) => {
+    console.error('[WA] ERREUR client :', err && err.message ? err.message : err);
+});
+
+// --- Demarrage ---
+// initialize() est asynchrone et rejectait silencieusement jusqu'ici :
+// toute erreur (ex. cache web non inscriptible) laissait le bot bloque
+// sans le moindre message dans les logs.
+(async () => {
+    try {
+        await client.initialize();
+        console.log('[WA] Client initialise.');
+    } catch (err) {
+        console.error('[WA] ECHEC de l initialisation :', err && err.stack ? err.stack : err);
+        process.exitCode = 1;
+    }
+})();
 
 console.log('[WA] Demarrage du client WhatsApp (whatsapp-web.js)…');

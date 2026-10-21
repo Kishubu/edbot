@@ -27,5 +27,14 @@ if [ -d /app/.wwebjs_auth ]; then
     find /app/.wwebjs_auth -name "SingletonSocket" -delete 2>/dev/null || true
 fi
 
+# --- Repertoires necessaires au client WhatsApp (inscriptibles) ---
+# .wwebjs_cache : cache web local de whatsapp-web.js. S'il n'est pas
+# inscriptible, l'ecriture echoue en EACCES et interrompt l'injection de
+# window.WWebJS : l'evenement 'ready' n'est alors jamais emis.
+CACHE_DIR=/app/.wwebjs_cache
+mkdir -p "$CACHE_DIR"
+chown -R "$EDBOT_UID:$EDBOT_GID" "$CACHE_DIR" 2>/dev/null || true
+chmod -R u+rwX "$CACHE_DIR" 2>/dev/null || true
+
 # --- Passer à l'utilisateur non-root pour exécuter node ---
 exec gosu "$EDBOT_UID:$EDBOT_GID" "$@"
