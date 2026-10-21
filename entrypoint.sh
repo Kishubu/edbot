@@ -12,5 +12,13 @@ if [ -d /app/.wwebjs_auth ]; then
 fi
 chown -R "$EDBOT_UID:$EDBOT_GID" /app/state /app/documents 2>/dev/null || true
 
+# --- Déverrouiller le profil Chromium (évite le verrou "profile in use") ---
+if [ -d /app/.wwebjs_auth ]; then
+    find /app/.wwebjs_auth -name "*.lock" -delete 2>/dev/null || true
+    find /app/.wwebjs_auth -name "SingletonLock" -delete 2>/dev/null || true
+    find /app/.wwebjs_auth -name "SingletonCookie" -delete 2>/dev/null || true
+    find /app/.wwebjs_auth -name "SingletonSocket" -delete 2>/dev/null || true
+fi
+
 # --- Passer à l'utilisateur non-root pour exécuter node ---
 exec gosu "$EDBOT_UID:$EDBOT_GID" "$@"
