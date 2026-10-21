@@ -1,0 +1,20 @@
+# edbot : bot Telegram + suivi École Directe.
+# Aucun port publié : uniquement des appels sortants (Telegram, École Directe, SMTP).
+services:
+  edbot:
+    build: .
+    image: edbot:latest
+    container_name: edbot
+    restart: unless-stopped
+    # Utilisateur qui possède ./state et ./documents (voir README).
+    user: "${EDBOT_UID:-1000}:${EDBOT_GID:-1000}"
+    environment:
+      - EDBOT_CONFIG_PATH=/app/state/config.ini
+      - EDBOT_STATE_PATH=/app/state/state.json
+      - TZ=Europe/Paris
+    volumes:
+      # Monter le DOSSIER, pas les fichiers : state.json est réécrit de façon atomique.
+      - ./state:/app/state
+      - ./documents:/data/EcoleDirecte
+    security_opt:
+      - no-new-privileges:true
