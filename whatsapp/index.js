@@ -199,7 +199,7 @@ client.on('message_create', async (msg) => {
 
     const parts = text.slice(1).split(/\s+/);
     const cmd = parts[0].toLowerCase();
-    const validCmds = ['notes', 'moyennes', 'recent', 'check', 'sync', 'help'];
+    const validCmds = ['notes', 'moyennes', 'recent', 'check', 'sync', 'help', '2fa'];
 
     if (!validCmds.includes(cmd)) {
         await msg.reply(BOT_TAG + '❓ Commande inconnue. Tapez *!help* pour la liste des commandes.');
@@ -213,17 +213,29 @@ client.on('message_create', async (msg) => {
             '*!moyennes* — moyennes par matière\n' +
             '*!recent* — 10 dernières notes\n' +
             '*!check* — forcer une vérification immédiate\n' +
-            '*!sync* — archiver les nouveaux documents\n\n' +
+            '*!sync* — archiver les nouveaux documents\n' +
+            '*!2fa <n>* — répondre à la vérification de sécurité\n\n' +
             'Le bot répond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';
         await msg.reply(BOT_TAG + helpText);
         return;
+    }
+
+    // Réponse à la vérification de sécurité : "!2fa 3"
+    const args = [];
+    if (cmd === '2fa') {
+        const n = parseInt(parts[1], 10);
+        if (!Number.isFinite(n)) {
+            await msg.reply(BOT_TAG + '❓ Réponse invalide. Usage : *!2fa <numéro>*');
+            return;
+        }
+        args.push(String(n));
     }
 
     await msg.reply(BOT_TAG + '🔎 Traitement de la commande *!' + cmd + '*…');
 
     execFile(
         'python3',
-        [path.join(APP_DIR, 'edbot_cmd.py'), cmd],
+        [path.join(APP_DIR, 'edbot_cmd.py'), cmd].concat(args),
         {
             cwd: APP_DIR,
             timeout: 180000,

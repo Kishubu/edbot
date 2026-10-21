@@ -164,6 +164,45 @@ HELP_TEXT = (
 )
 
 
+def cmd_2fa(sess, state, index):
+    """Répond à la question de sécurité en attente et rejoue la commande.
+
+    L'index (1-based) correspond à la proposition affichée par le bot.
+    """
+    pending = state.get('pending_2fa')
+    if not pending:
+        return '❓ Aucune vérification de sécurité en attente.'
+
+    props = pending.get('propositions', [])
+    if not (1 <= index <= len(props)):
+        return f'❓ Choix invalide (1 à {len(props)}).'
+
+    chosen_raw = props[index - 1]
+    status, payload = sess.submit_2fa(pending['token'], chosen_raw)
+    if status != 'ok':
+        state.pop('pending_2fa', None)
+        ed.save_state(state)
+        return f'⚠️ Réponse refusée : {payload}'
+
+    # On mémorise la réponse pour la prochaine fois.
+    state.setdefault('twofa_answers', {})[pending['question']] = chosen_raw
+    state.pop('pending_2fa', None)
+    ed.save_state(state)
+
+    resume_cmd = pending.get('command', 'notes')
+    accounts = payload.get('data', {}).get('accounts', [])
+    if resume_cmd in ('notes', 'moyennes', 'recent'):
+        body = cmd_notes(sess, accounts, resume_cmd)
+    elif resume_cmd == 'check':
+        body = cmd_check(sess, accounts)
+    elif resume_cmd == 'sync':
+        body = cmd_sync(sess, accounts)
+    else:
+        body = '✅ Vérification réussie.'
+
+    return '✅ Vérification réussie.\n\n' + body
+
+
 def main():
     if len(sys.argv) < 2:
         print('Usage: edbot_cmd.py <commande>')
@@ -181,7 +220,39 @@ def main():
         state
     )
 
+    # --- Commande de réponse au 2FA (cas particulier : geree avant login) ---
+    if cmd == '2fa':
+        try:
+            idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+        except ValueError:
+            print('❓ Réponse invalide. Usage : !2fa <numéro>')
+            sys.exit(1)
+        print(cmd_2fa(sess, state, idx))
+        return
+
     status, payload = sess.ensure_logged_in()
+    if status == '2fa':
+        # On memorise la question en cours et la commande a rejouer, puis on
+        # demande a l'utilisateur de repondre avec !2fa <numero>.
+        state['pending_2fa'] = {
+            'question': payload['question'],
+            'propositions': payload['propositions'],
+            'token': payload['token'],
+            'command': cmd if cmd in ('notes', 'moyennes', 'recent', 'check', 'sync') else 'notes',
+        }
+        ed.save_state(state)
+        lignes = ['🔐 *Vérification de sécurité École Directe*', '',
+                  payload['question'], '']
+        for i, p in enumerate(payload['propositions'], 1):
+            try:
+                valeur = ed._b64d(p)
+            except Exception:
+                valeur = p
+            lignes.append(f'{i}. {valeur}')
+        lignes += ['', 'Réponds avec *!2fa <numéro>* (numéro de la bonne réponse).']
+        print('\n'.join(lignes))
+        sys.exit(0)
+
     if status != 'ok':
         print(f'❌ Connexion École Directe échouée : {payload}')
         sys.exit(1)
