@@ -2,17 +2,12 @@
 
 [ecoledirecte]
 # Identifiants du compte PARENT (ceux du site / de l'appli).
-identifiant = 
-motdepasse = 
+identifiant =
+motdepasse =
 
-[telegram]
-# Jeton donné par @BotFather.
-bot_token = 
-# Chats autorisés à piloter le bot (ids séparés par des virgules).
-# Vide = tout le monde : à ne laisser vide que le temps de trouver son id.
-allowed_chats = 
-# Où envoyer notifications et questions de sécurité (vide = 1er chat autorisé).
-notify_chat = 
+[whatsapp]
+# Nom du groupe WhatsApp surveillé par le bot.
+group = Ecoledirect
 
 [notifications]
 # Fréquence de vérification, en minutes.
@@ -26,8 +21,8 @@ auth_alert_minutes = 60
 # Supprimer toute la section pour désactiver.
 [mail]
 # Adresse Gmail expéditrice.
-smtp_user = 
+smtp_user =
 # Mot de passe d'APPLICATION Gmail (compte Google > Sécurité > Mots de passe des applications).
-smtp_password = 
+smtp_password =
 # Destinataire(s), séparés par des virgules.
-destinataire = 
+destinataire =

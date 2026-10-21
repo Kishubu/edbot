@@ -42,3 +42,17 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- WhatsApp session (whatsapp-web.js) ---
+.wwebjs_auth/
+WWebJS_session/
+*.session
+
+# --- QR code temporaires ---
+qr-*.png

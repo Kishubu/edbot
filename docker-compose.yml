@@ -1,5 +1,5 @@
-# edbot : bot Telegram + suivi École Directe.
-# Aucun port publié : uniquement des appels sortants (Telegram, École Directe, SMTP).
+# edbot : bot WhatsApp + suivi École Directe.
+# Le port 3000 expose le QR code HTTP pour l'appairage WhatsApp.
 services:
   edbot:
     build: .
@@ -12,6 +12,10 @@ services:
       - EDBOT_CONFIG_PATH=/app/state/config.ini
       - EDBOT_STATE_PATH=/app/state/state.json
       - TZ=Europe/Paris
+      - WHATSAPP_GROUP=Ecoledirect
+      - PORT=3000
+    ports:
+      - "3000:3000"
     volumes:
       # Monter le DOSSIER, pas les fichiers : state.json est réécrit de façon atomique.
       - ./state:/app/state

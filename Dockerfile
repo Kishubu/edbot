@@ -1,5 +1,71 @@
-FROM python:3.13-slim
+FROM node:20-slim
+
+# Dépendances système : Python3 + bibliothèques Chromium (Puppeteer pour whatsapp-web.js)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libc6 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libexpat1 \
+    libfontconfig1 \
+    libgbm1 \
+    libgcc1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libstdc++6 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxrandr2 \
+    libxrender1 \
+    libxss1 \
+    libxtst6 \
+    lsb-release \
+    wget \
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY edbot.py edsync.py edmail.py ed2fa.py ./
-RUN chmod 644 *.py
-CMD ["python3", "-u", "edbot.py"]
+
+# Fichiers Python (logique métier École Directe)
+COPY edbot.py edsync.py edmail.py ed2fa.py edbot_cmd.py ./
+COPY config.ini.example state.json.example ./
+COPY API-EcoleDirecte.md README.md ./
+
+# Dépendances Node.js (bot WhatsApp)
+COPY whatsapp/package.json ./whatsapp/
+RUN cd whatsapp && npm install
+
+# Code du bot WhatsApp
+COPY whatsapp/index.js ./whatsapp/
+
+# Dossiers de données
+RUN mkdir -p state documents
+
+# Configuration
+ENV EDBOT_CONFIG_PATH=/app/state/config.ini
+ENV EDBOT_STATE_PATH=/app/state/state.json
+ENV TZ=Europe/Paris
+ENV WHATSAPP_GROUP=Ecoledirect
+ENV PORT=3000
+
+EXPOSE 3000
+
+CMD ["node", "whatsapp/index.js"]
