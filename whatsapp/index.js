@@ -10,6 +10,7 @@ const WHATSAPP_GROUP = process.env.WHATSAPP_GROUP || 'Ecoledirect';
 
 let qrDataUrl = null;
 let clientReady = false;
+let targetGroupId = null;
 
 // --- Serveur HTTP pour exposer le QR code ---
 const app = express();
@@ -22,12 +23,13 @@ app.get('/qr', (_req, res) => {
 });
 
 app.get('/status', (_req, res) => {
-    res.json({ ready: clientReady, hasQr: !!qrDataUrl, group: WHATSAPP_GROUP });
+    res.json({ ready: clientReady, hasQr: !!qrDataUrl, group: WHATSAPP_GROUP, groupId: targetGroupId });
 });
 
 app.listen(PORT, () => {
     console.log('[HTTP] Serveur sur le port ' + PORT + ' — QR code : http://localhost:' + PORT + '/qr');
 });
+
 // --- Client WhatsApp ---
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: 'edbot-whatsapp' }),
@@ -58,10 +60,24 @@ client.on('qr', (qr) => {
     });
 });
 
-client.on('ready', () => {
+client.on('ready', async () => {
     console.log('[WA] Client WhatsApp prêt !');
     clientReady = true;
     qrDataUrl = null;
+
+    try {
+        const chats = await client.getChats();
+        const group = chats.find(c => c.isGroup && c.name === WHATSAPP_GROUP);
+        if (group) {
+            targetGroupId = group.id._serialized;
+            console.log('[WA] Groupe cible :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
+        } else {
+            const noms = chats.filter(c => c.isGroup).map(c => c.name).join(', ') || '(aucun)';
+            console.log('[WA] Groupe "' + WHATSAPP_GROUP + '" introuvable. Groupes : ' + noms);
+        }
+    } catch (e) {
+        console.error('[WA] Erreur recherche groupe :', e.message);
+    }
 });
 
 client.on('authenticated', () => {
@@ -73,27 +89,32 @@ client.on('auth_failure', (msg) => {
 });
 
 client.on('message', async (msg) => {
-    // Ignorer les messages privés (uniquement les groupes)
-    if (msg.from.endsWith('@c.us')) {
+    if (!msg.from || !msg.from.includes('@g.us')) {
         return;
     }
 
-    let chat;
-    try {
-        chat = await msg.getChat();
-    } catch (e) {
-        console.error('[WA] Impossible de récupérer le chat :', e);
+    if (targetGroupId && msg.from !== targetGroupId) {
         return;
     }
 
-    // Ne répondre que dans le groupe configuré
-    if (!chat.isGroup || chat.name !== WHATSAPP_GROUP) {
-        return;
+    if (!targetGroupId) {
+        try {
+            const chat = await client.getChatById(msg.from);
+            if (chat.isGroup && chat.name === WHATSAPP_GROUP) {
+                targetGroupId = msg.from;
+                console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
+            } else {
+                return;
+            }
+        } catch (e) {
+            console.error('[WA] Impossible de vérifier le groupe :', e.message);
+            return;
+        }
     }
 
     const text = (msg.body || '').trim();
     if (!text.startsWith('!')) {
-        return; // Ignorer les messages qui ne sont pas des commandes
+        return;
     }
 
     const parts = text.slice(1).split(/\s+/);
@@ -118,10 +139,8 @@ client.on('message', async (msg) => {
         return;
     }
 
-    // Indiquer que le bot traite la demande
     await msg.reply('🔎 Traitement de la commande *!' + cmd + '*…');
 
-    // Appeler le wrapper Python pour exécuter la commande École Directe
     execFile(
         'python3',
         [path.join(APP_DIR, 'edbot_cmd.py'), cmd],
