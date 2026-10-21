@@ -57,7 +57,7 @@ RUN cd whatsapp && npm install
 COPY whatsapp/index.js ./whatsapp/
 
 # Dossiers de données
-RUN mkdir -p state documents
+RUN mkdir -p state documents .wwebjs_auth && chmod 777 .wwebjs_auth
 
 # Configuration
 ENV EDBOT_CONFIG_PATH=/app/state/config.ini
