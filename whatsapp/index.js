@@ -46,7 +46,13 @@ const client = new Client({
             '--no-zygote',
             '--single-process',
             '--disable-gpu',
-            '--disable-features=site-per-process,BlinkGenPropertyTrees,AudioServiceOutOfProcess,VideoCapture,GpuProcess,NetworkService,Translate'
+            '--disable-features=site-per-process,BlinkGenPropertyTrees,AudioServiceOutOfProcess,VideoCapture,GpuProcess,NetworkService,Translate,OverlayScrollbar,PrintPreview,MediaFoundation,AudioService,IsolatedOrigins',
+            '--disable-ipc-flooding-protection',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--disable-extensions',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding'
         ]
     }
 });

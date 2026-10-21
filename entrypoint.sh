@@ -1,11 +1,6 @@
 #!/bin/sh
 set -e
 
-# --- Démarrer dbus système (requis par Chromium/Puppeteer dans Docker) ---
-mkdir -p /run/dbus
-dbus-daemon --system 2>/dev/null || true
-export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
-
 # --- Corrections de permissions au démarrage (root) ---
 if [ -d /app/.wwebjs_auth ]; then
     chown -R "$EDBOT_UID:$EDBOT_GID" /app/.wwebjs_auth 2>/dev/null || true
