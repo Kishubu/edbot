@@ -7,6 +7,7 @@ const path = require('path');
 const APP_DIR = path.resolve(__dirname, '..');
 const PORT = process.env.PORT || 3000;
 const WHATSAPP_GROUP = process.env.WHATSAPP_GROUP || 'Ecoledirect';
+const BOT_TAG = '🤖 ';
 
 let qrDataUrl = null;
 let clientReady = false;
@@ -89,7 +90,7 @@ client.on('auth_failure', (msg) => {
     console.error('[WA] Échec d\'authentification WhatsApp :', msg);
 });
 
-client.on('message', async (msg) => {
+client.on('message_create', async (msg) => {
     // --- Logs détaillés pour le débogage ---
     const from = msg.from || '(inconnu)';
     const body = (msg.body || '').trim();
@@ -103,6 +104,10 @@ client.on('message', async (msg) => {
         // Ignore les erreurs de récupération du chat
     }
     console.log('[WA][MSG] from=' + from + ' | isGroup=' + isGroup + ' | name="' + chatName + '" | body="' + body + '"');
+    if (body.startsWith(BOT_TAG)) {
+        console.log('[WA][MSG] ignoré (message émis par le bot)');
+        return;
+    }
 
     if (!msg.from || !msg.from.includes('@g.us')) {
         console.log('[WA][MSG] ignoré (pas un groupe)');
@@ -140,7 +145,7 @@ client.on('message', async (msg) => {
     const validCmds = ['notes', 'moyennes', 'recent', 'check', 'sync', 'help'];
 
     if (!validCmds.includes(cmd)) {
-        await msg.reply('❓ Commande inconnue. Tapez *!help* pour la liste des commandes.');
+        await msg.reply(BOT_TAG + '❓ Commande inconnue. Tapez *!help* pour la liste des commandes.');
         return;
     }
 
@@ -153,11 +158,11 @@ client.on('message', async (msg) => {
             '*!check* — forcer une vérification immédiate\n' +
             '*!sync* — archiver les nouveaux documents\n\n' +
             'Le bot répond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';
-        await msg.reply(helpText);
+        await msg.reply(BOT_TAG + helpText);
         return;
     }
 
-    await msg.reply('🔎 Traitement de la commande *!' + cmd + '*…');
+    await msg.reply(BOT_TAG + '🔎 Traitement de la commande *!' + cmd + '*…');
 
     execFile(
         'python3',
@@ -170,7 +175,7 @@ client.on('message', async (msg) => {
         (error, stdout, stderr) => {
             if (error) {
                 console.error('[WA] Erreur exécution Python :', error);
-                msg.reply('⚠️ Erreur lors de l\'exécution de la commande.');
+                msg.reply(BOT_TAG + '⚠️ Erreur lors de l\'exécution de la commande.');
                 return;
             }
             if (stderr) {
@@ -181,7 +186,7 @@ client.on('message', async (msg) => {
             const reply = output.length > maxLen
                 ? output.slice(0, maxLen) + '\n… (message tronqué)'
                 : output;
-            msg.reply(reply);
+            msg.reply(BOT_TAG + reply);
         }
     );
 });
