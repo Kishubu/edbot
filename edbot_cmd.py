@@ -32,6 +32,11 @@ def strip_html(text):
         return ''
     text = text.replace('<b>', '*').replace('</b>', '*')
     text = text.replace('<i>', '_').replace('</i>', '_')
+    text = text.replace('&#x27;', "'").replace('&quot;', '"')
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+    return text
+
+
 def fmt_simple_note(n):
     """Formatage minimal d'une note pour WhatsApp."""
     eleve = n.get('eleve', '')
@@ -72,9 +77,7 @@ def cmd_notes(sess, accounts, kind):
             lines.append(strip_html(ed.fmt_recent(el, data, limit=15)))
 
     return '\n\n'.join(lines)
-    text = text.replace('&#x27;', "'").replace('&quot;', '"')
-    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-    return text
+
 
 def cmd_check(sess, accounts):
     """Vérifie les nouvelles notes et renvoie le résultat."""
