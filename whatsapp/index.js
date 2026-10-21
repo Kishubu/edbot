@@ -191,6 +191,15 @@ client.on('message_create', async (msg) => {
     );
 });
 
+// --- Ecouteurs d'etat pour debogage ---
+client.on('change:state', (state) => {
+    console.log('[WA][STATE] Changement d etat :', state);
+});
+
+client.on('disconnected', (reason) => {
+    console.log('[WA] Deconnecte :', reason);
+});
+
 client.initialize();
 
-console.log('[WA] Démarrage du client WhatsApp (whatsapp-web.js)…');
+console.log('[WA] Demarrage du client WhatsApp (whatsapp-web.js)…');
