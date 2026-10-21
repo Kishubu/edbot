@@ -89,35 +89,39 @@ client.on('ready', async () => {
 });
 
 // Recherche du groupe cible.
-// getChats() peut echouer (acces IndexedDB) ou ne pas exposer chat.isGroup
-// selon la version de WhatsApp Web : on s'appuie donc sur l'identifiant
-// "@g.us" (signature d'un groupe) et sur le nom, avec une tolerance aux
-// erreurs sur chaque chat.
+// getChats() echoue via getChatModel() sur les groupes : whatsapp-web.js
+// appelle groupMetadata.update(), qui leve une DataError IndexedDB
+// ("No key or key range specified") pour la plupart des chats. On resolve
+// donc le groupe directement dans la page, via le modele brut, sans passer
+// par getChatModel() : on identifie un groupe par son identifiant "@g.us".
 async function findTargetGroup() {
     try {
-        const chats = await client.getChats();
-        const groupes = chats.filter(c => c.id && c.id._serialized && c.id._serialized.includes('@g.us'));
-        const cible = groupes.find(c => c.name === WHATSAPP_GROUP);
-        if (cible) {
-            targetGroupId = cible.id._serialized;
-            console.log('[WA] Groupe cible :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
+        const found = await client.pupPage.evaluate((wanted) => {
+            const models = window
+                .require('WAWebCollections')
+                .Chat.getModelsArray();
+            const model = models.find(
+                (m) =>
+                    m.id &&
+                    String(m.id._serialized || '').includes('@g.us') &&
+                    m.attributes &&
+                    m.attributes.name === wanted
+            );
+            if (!model) return null;
+            return {
+                id: model.id._serialized,
+                name: model.attributes.name
+            };
+        }, WHATSAPP_GROUP);
+
+        if (found && found.id) {
+            targetGroupId = found.id;
+            console.log('[WA] Groupe cible :', found.name, '(' + targetGroupId + ')');
         } else {
-            const noms = groupes.map(c => c.name).join(', ') || '(aucun)';
-            console.log('[WA] Groupe "' + WHATSAPP_GROUP + '" introuvable. Groupes : ' + noms);
+            console.log('[WA] Groupe "' + WHATSAPP_GROUP + '" introuvable.');
         }
     } catch (e) {
         console.error('[WA] Erreur recherche groupe :', e && e.message ? e.message : e);
-        // Repli : on tente une resolution par identifiant de groupe connu
-        try {
-            const chats = await client.getChats();
-            const cible = chats.find(c => c.name === WHATSAPP_GROUP);
-            if (cible) {
-                targetGroupId = cible.id._serialized;
-                console.log('[WA] Groupe cible (repli) :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
-            }
-        } catch (_) {
-            // le groupe sera de toute facon decouvert a la reception d'un message
-        }
     }
 }
 
@@ -129,20 +133,33 @@ client.on('auth_failure', (msg) => {
     console.error('[WA] Échec d\'authentification WhatsApp :', msg);
 });
 
+// Nom d'un chat, resolu directement dans la page.
+// getChatById() / getChats() passent par getChatModel(), qui appelle
+// groupMetadata.update() : cet appel echoue avec une DataError IndexedDB
+// ("No key or key range specified") sur la plupart des chats, et fait donc
+// echouer getChats() en entier. On interroge directement le modele brut.
+async function getChatNameInPage(chatId) {
+    try {
+        return await client.pupPage.evaluate((id) => {
+            const wid = window.require('WAWebWidFactory').createWid(id);
+            const model =
+                window.require('WAWebCollections').Chat.get(wid);
+            if (!model) return '';
+            return model.attributes
+                ? model.attributes.name || model.attributes.formattedTitle || ''
+                : '';
+        }, chatId);
+    } catch (e) {
+        console.error('[WA] Impossible de lire le nom du chat :', e && e.message ? e.message : e);
+        return '';
+    }
+}
+
 client.on('message_create', async (msg) => {
     // --- Logs détaillés pour le débogage ---
     const from = msg.from || '(inconnu)';
     const body = (msg.body || '').trim();
-    let chatName = '(inconnu)';
-    let isGroup = false;
-    try {
-        const chat = await client.getChatById(from);
-        chatName = chat.name || '(sans nom)';
-        isGroup = !!chat.isGroup;
-    } catch (e) {
-        // Ignore les erreurs de récupération du chat
-    }
-    console.log('[WA][MSG] from=' + from + ' | isGroup=' + isGroup + ' | name="' + chatName + '" | body="' + body + '"');
+    console.log('[WA][MSG] from=' + from + ' | body="' + body + '"');
     if (body.startsWith(BOT_TAG)) {
         console.log('[WA][MSG] ignoré (message émis par le bot)');
         return;
@@ -159,22 +176,14 @@ client.on('message_create', async (msg) => {
     }
 
     if (!targetGroupId) {
-        // On ne fait pas confiance a chat.isGroup (non porte par les modeles
-        // WhatsApp Web actuels) : un identifiant "@g.us" signe un groupe.
-        let chat = null;
-        try {
-            chat = await client.getChatById(msg.from);
-        } catch (e) {
-            console.error('[WA] Impossible de récupérer le chat :', e && e.message ? e.message : e);
-        }
-        const chatId = chat && chat.id ? chat.id._serialized : msg.from;
-        const chatNom = chat && chat.name ? chat.name : '';
-
-        if (chatId.includes('@g.us') && chatNom === WHATSAPP_GROUP) {
-            targetGroupId = chatId;
+        // Résolution directe du chat dans la page : getChatById() passe par
+        // getChatModel() qui échoue sur l'IndexedDB pour les groupes.
+        const chatNom = await getChatNameInPage(msg.from);
+        if (chatNom === WHATSAPP_GROUP) {
+            targetGroupId = msg.from;
             console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
         } else {
-            console.log('[WA][MSG] ignoré (chat "' + chatNom + '" / ' + chatId + ' ne correspond pas à "' + WHATSAPP_GROUP + '")');
+            console.log('[WA][MSG] ignoré (chat "' + chatNom + '" ne correspond pas à "' + WHATSAPP_GROUP + '")');
             return;
         }
     }
