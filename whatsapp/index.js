@@ -157,20 +157,24 @@ async function getChatNameInPage(chatId) {
 
 client.on('message_create', async (msg) => {
     // --- Logs détaillés pour le débogage ---
-    const from = msg.from || '(inconnu)';
+    // Attention : msg.from est l'EXPEDITEUR (ex. 108151672152246@lid), pas la
+    // conversation. Dans un groupe, c'est msg.to qui porte l'identifiant du
+    // groupe ("...@g.us"). On utilise donc msg.to pour cibler le groupe.
     const body = (msg.body || '').trim();
-    console.log('[WA][MSG] from=' + from + ' | body="' + body + '"');
+    const chatId = (msg.fromMe ? msg.to : msg.from) || msg.from || '';
+    console.log('[WA][MSG] chat=' + chatId + ' | from=' + (msg.from || '?') +
+        ' | fromMe=' + msg.fromMe + ' | body="' + body + '"');
     if (body.startsWith(BOT_TAG)) {
         console.log('[WA][MSG] ignoré (message émis par le bot)');
         return;
     }
 
-    if (!msg.from || !msg.from.includes('@g.us')) {
+    if (!chatId.includes('@g.us')) {
         console.log('[WA][MSG] ignoré (pas un groupe)');
         return;
     }
 
-    if (targetGroupId && msg.from !== targetGroupId) {
+    if (targetGroupId && chatId !== targetGroupId) {
         console.log('[WA][MSG] ignoré (groupe différent de la cible ' + targetGroupId + ')');
         return;
     }
@@ -178,9 +182,9 @@ client.on('message_create', async (msg) => {
     if (!targetGroupId) {
         // Résolution directe du chat dans la page : getChatById() passe par
         // getChatModel() qui échoue sur l'IndexedDB pour les groupes.
-        const chatNom = await getChatNameInPage(msg.from);
+        const chatNom = await getChatNameInPage(chatId);
         if (chatNom === WHATSAPP_GROUP) {
-            targetGroupId = msg.from;
+            targetGroupId = chatId;
             console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
         } else {
             console.log('[WA][MSG] ignoré (chat "' + chatNom + '" ne correspond pas à "' + WHATSAPP_GROUP + '")');
