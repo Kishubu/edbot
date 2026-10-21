@@ -85,20 +85,41 @@ client.on('ready', async () => {
     clientReady = true;
     qrDataUrl = null;
 
+    await findTargetGroup();
+});
+
+// Recherche du groupe cible.
+// getChats() peut echouer (acces IndexedDB) ou ne pas exposer chat.isGroup
+// selon la version de WhatsApp Web : on s'appuie donc sur l'identifiant
+// "@g.us" (signature d'un groupe) et sur le nom, avec une tolerance aux
+// erreurs sur chaque chat.
+async function findTargetGroup() {
     try {
         const chats = await client.getChats();
-        const group = chats.find(c => c.isGroup && c.name === WHATSAPP_GROUP);
-        if (group) {
-            targetGroupId = group.id._serialized;
+        const groupes = chats.filter(c => c.id && c.id._serialized && c.id._serialized.includes('@g.us'));
+        const cible = groupes.find(c => c.name === WHATSAPP_GROUP);
+        if (cible) {
+            targetGroupId = cible.id._serialized;
             console.log('[WA] Groupe cible :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
         } else {
-            const noms = chats.filter(c => c.isGroup).map(c => c.name).join(', ') || '(aucun)';
+            const noms = groupes.map(c => c.name).join(', ') || '(aucun)';
             console.log('[WA] Groupe "' + WHATSAPP_GROUP + '" introuvable. Groupes : ' + noms);
         }
     } catch (e) {
-        console.error('[WA] Erreur recherche groupe :', e.message);
+        console.error('[WA] Erreur recherche groupe :', e && e.message ? e.message : e);
+        // Repli : on tente une resolution par identifiant de groupe connu
+        try {
+            const chats = await client.getChats();
+            const cible = chats.find(c => c.name === WHATSAPP_GROUP);
+            if (cible) {
+                targetGroupId = cible.id._serialized;
+                console.log('[WA] Groupe cible (repli) :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
+            }
+        } catch (_) {
+            // le groupe sera de toute facon decouvert a la reception d'un message
+        }
     }
-});
+}
 
 client.on('authenticated', () => {
     console.log('[WA] Authentification WhatsApp réussie.');
@@ -138,17 +159,22 @@ client.on('message_create', async (msg) => {
     }
 
     if (!targetGroupId) {
+        // On ne fait pas confiance a chat.isGroup (non porte par les modeles
+        // WhatsApp Web actuels) : un identifiant "@g.us" signe un groupe.
+        let chat = null;
         try {
-            const chat = await client.getChatById(msg.from);
-            if (chat.isGroup && chat.name === WHATSAPP_GROUP) {
-                targetGroupId = msg.from;
-                console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
-            } else {
-                console.log('[WA][MSG] ignoré (nom groupe "' + chatName + '" ne correspond pas à "' + WHATSAPP_GROUP + '")');
-                return;
-            }
+            chat = await client.getChatById(msg.from);
         } catch (e) {
-            console.error('[WA] Impossible de vérifier le groupe :', e.message);
+            console.error('[WA] Impossible de récupérer le chat :', e && e.message ? e.message : e);
+        }
+        const chatId = chat && chat.id ? chat.id._serialized : msg.from;
+        const chatNom = chat && chat.name ? chat.name : '';
+
+        if (chatId.includes('@g.us') && chatNom === WHATSAPP_GROUP) {
+            targetGroupId = chatId;
+            console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
+        } else {
+            console.log('[WA][MSG] ignoré (chat "' + chatNom + '" / ' + chatId + ' ne correspond pas à "' + WHATSAPP_GROUP + '")');
             return;
         }
     }
