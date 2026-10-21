@@ -43,9 +43,8 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process',
             '--disable-gpu',
-            '--disable-features=site-per-process'
+            '--disable-features=site-per-process,BlinkGenPropertyTrees,AudioServiceOutOfProcess,VideoCapture,GpuProcess,NetworkService,Translate'
         ]
     }
 });
