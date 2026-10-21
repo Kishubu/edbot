@@ -90,11 +90,27 @@ client.on('auth_failure', (msg) => {
 });
 
 client.on('message', async (msg) => {
+    // --- Logs détaillés pour le débogage ---
+    const from = msg.from || '(inconnu)';
+    const body = (msg.body || '').trim();
+    let chatName = '(inconnu)';
+    let isGroup = false;
+    try {
+        const chat = await client.getChatById(from);
+        chatName = chat.name || '(sans nom)';
+        isGroup = !!chat.isGroup;
+    } catch (e) {
+        // Ignore les erreurs de récupération du chat
+    }
+    console.log('[WA][MSG] from=' + from + ' | isGroup=' + isGroup + ' | name="' + chatName + '" | body="' + body + '"');
+
     if (!msg.from || !msg.from.includes('@g.us')) {
+        console.log('[WA][MSG] ignoré (pas un groupe)');
         return;
     }
 
     if (targetGroupId && msg.from !== targetGroupId) {
+        console.log('[WA][MSG] ignoré (groupe différent de la cible ' + targetGroupId + ')');
         return;
     }
 
@@ -105,6 +121,7 @@ client.on('message', async (msg) => {
                 targetGroupId = msg.from;
                 console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
             } else {
+                console.log('[WA][MSG] ignoré (nom groupe "' + chatName + '" ne correspond pas à "' + WHATSAPP_GROUP + '")');
                 return;
             }
         } catch (e) {
