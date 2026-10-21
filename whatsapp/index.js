@@ -34,6 +34,11 @@ app.listen(PORT, () => {
 // --- Client WhatsApp ---
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: 'edbot-whatsapp' }),
+    // L'UA par defaut de whatsapp-web.js annonce Chrome 101 : WhatsApp Web refuse
+    // alors de charger ses modules, ce qui empeche l'injection de window.WWebJS
+    // et donc l'evenement 'ready' (le client reste bloque a 99% de chargement).
+    // On aligne l'UA sur le Chromium reellement installe dans l'image.
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
     puppeteer: {
         headless: true,
         executablePath: '/usr/bin/chromium',
