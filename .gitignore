@@ -1,0 +1,44 @@
+# --- Secrets et configuration sensible (NE JAMAIS versionner) ---
+state/config.ini
+state/state.json
+.env
+
+# --- Données générées par le bot ---
+documents/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.env/
+.venv/
+
+# --- Docker ---
+.dockerignore
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Editeurs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
