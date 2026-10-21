@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# --- Démarrer dbus (requis par Chromium/Puppeteer dans Docker) ---
+mkdir -p /run/dbus
+dbus-daemon --system 2>/dev/null || true
+
 # --- Corrections de permissions au démarrage ---
 
 # Dossier de session whatsapp-web.js (créé au runtime, appartient à root après npm install)

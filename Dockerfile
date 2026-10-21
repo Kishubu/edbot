@@ -1,10 +1,11 @@
 FROM node:20-slim
 
-# Dépendances système : Python3 + Chromium (Puppeteer pour whatsapp-web.js)
+# Dépendances système : Python3 + Chromium + dbus (Puppeteer pour whatsapp-web.js)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     chromium \
+    dbus \
     ca-certificates \
     fonts-liberation \
     libasound2 \
