@@ -55,4 +55,4 @@ WWebJS_session/
 *.session
 
 # --- QR code temporaires ---
-qr-*.png
+qr-*.pngqr.png
