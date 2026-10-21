@@ -65,7 +65,15 @@ ENV EDBOT_STATE_PATH=/app/state/state.json
 ENV TZ=Europe/Paris
 ENV WHATSAPP_GROUP=Ecoledirect
 ENV PORT=3000
+# Valeurs par défaut pour les permissions (surchargeables par --user ou docker-compose)
+ENV EDBOT_UID=1000
+ENV EDBOT_GID=1000
 
 EXPOSE 3000
 
+# Script d'entrée pour corriger les permissions avant de lancer node
+COPY entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "whatsapp/index.js"]
