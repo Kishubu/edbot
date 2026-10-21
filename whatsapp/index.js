@@ -43,8 +43,6 @@ const client = new Client({
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
-            '--no-zygote',
-            '--single-process',
             '--disable-gpu',
             '--disable-features=site-per-process,BlinkGenPropertyTrees,AudioServiceOutOfProcess,VideoCapture,GpuProcess,NetworkService,Translate,OverlayScrollbar,PrintPreview,MediaFoundation,AudioService,IsolatedOrigins',
             '--disable-ipc-flooding-protection',

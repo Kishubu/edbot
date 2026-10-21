@@ -61,7 +61,7 @@ RUN cd whatsapp && npm install
 COPY whatsapp/index.js ./whatsapp/
 
 # Dossiers de données
-RUN mkdir -p state documents .wwebjs_auth && chmod 777 .wwebjs_auth
+RUN mkdir -p state documents .wwebjs_auth .home && chmod 777 .wwebjs_auth
 
 # Configuration
 ENV EDBOT_CONFIG_PATH=/app/state/config.ini
@@ -72,6 +72,8 @@ ENV PORT=3000
 # Valeurs par défaut pour les permissions (surchargeables par --user ou docker-compose)
 ENV EDBOT_UID=1000
 ENV EDBOT_GID=1000
+# HOME inscriptible : indispensable pour chromium/crashpad en utilisateur non-root
+ENV HOME=/app/.home
 
 EXPOSE 3000
 
