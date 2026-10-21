@@ -192,6 +192,18 @@ client.on('message_create', async (msg) => {
 });
 
 // --- Ecouteurs d'etat pour debogage ---
+client.on('loading_screen', (percent, message) => {
+    console.log('[WA][LOADING] ' + percent + '% - ' + message);
+});
+
+client.on('authenticated', () => {
+    console.log('[WA] Authentification WhatsApp reussie.');
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('[WA] ECHEC authentification :', msg);
+});
+
 client.on('change:state', (state) => {
     console.log('[WA][STATE] Changement d etat :', state);
 });
