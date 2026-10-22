@@ -2,6 +2,7 @@
 # Tout le dossier state/ est ignoré : il contient config.ini (identifiants),
 # state.json (jeton, réponses 2FA) et les fichiers de travail du bot.
 state/
+state.json
 .env
 
 # --- Données générées par le bot ---
