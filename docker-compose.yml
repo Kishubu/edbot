@@ -6,19 +6,31 @@ services:
     image: edbot:latest
     container_name: edbot
     restart: unless-stopped
-    # Utilisateur qui possède ./state et ./documents (voir README).
-    user: "${EDBOT_UID:-1000}:${EDBOT_GID:-1000}"
+    # NE PAS forcer `user:` ici.
+    # L'entrypoint doit démarrer en root pour pouvoir corriger les
+    # permissions (/app/.home, /app/state, /app/.wwebjs_auth) puis basculer
+    # en EDBOT_UID:EDBOT_GID via gosu. Avec `user: 1000:1000`, le mkdir de
+    # /app/.home echoue en "Permission denied" et le conteneur ne démarre pas.
+    # Le downgrade non-root est fait par l'entrypoint (gosu), pas par Docker.
     environment:
       - EDBOT_CONFIG_PATH=/app/state/config.ini
       - EDBOT_STATE_PATH=/app/state/state.json
       - TZ=Europe/Paris
       - WHATSAPP_GROUP=Ecoledirect
       - PORT=3000
+      # Valeurs par défaut ; à surcharger via .env si l'utilisateur
+      # propriétaire des dossiers n'est pas 1000:1000 (voir README).
+      - EDBOT_UID=${EDBOT_UID:-1000}
+      - EDBOT_GID=${EDBOT_GID:-1000}
     ports:
       - "3000:3000"
     volumes:
       # Monter le DOSSIER, pas les fichiers : state.json est réécrit de façon atomique.
       - ./state:/app/state
       - ./documents:/data/EcoleDirecte
+      # Session WhatsApp (cookies + profil Chromium) : SANS ce montage, la
+      # session est reconstruite à chaque `up --build` et il faut re-scanner
+      # un QR code à chaque redémarrage.
+      - ./.wwebjs_auth:/app/.wwebjs_auth
     security_opt:
       - no-new-privileges:true

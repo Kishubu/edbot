@@ -1,4 +1,3 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
 const express = require('express');
 const qrcode = require('qrcode');
 const { execFile } = require('child_process');
@@ -12,6 +11,9 @@ const BOT_TAG = '🤖 ';
 let qrDataUrl = null;
 let clientReady = false;
 let targetGroupId = null;
+
+// --- Parsing des commandes (module séparé pour être testable) ---
+const { parseCommand } = require('./parse');
 
 // --- Serveur HTTP pour exposer le QR code ---
 const app = express();
@@ -32,17 +34,10 @@ app.listen(PORT, () => {
 });
 
 // --- Client WhatsApp ---
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: 'edbot-whatsapp' }),
-    // L'UA par defaut de whatsapp-web.js annonce Chrome 101 : WhatsApp Web refuse
-    // alors de charger ses modules, ce qui empeche l'injection de window.WWebJS
-    // et donc l'evenement 'ready' (le client reste bloque a 99% de chargement).
-    // On aligne l'UA sur le Chromium reellement installe dans l'image.
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
-    // Le cache web local ecrit dans './.wwebjs_cache/' relatif au CWD (/app),
-    // qui appartient a root : l'ecriture echoue en EACCES et interrompt inject()
-    // AVANT l'injection de window.WWebJS, donc l'evenement 'ready' n'est jamais
-    // emis (sans message d'erreur). On impose un chemin inscriptible.
     webVersionCache: {
         type: 'local',
         path: path.join(APP_DIR, '.wwebjs_cache')
@@ -84,16 +79,9 @@ client.on('ready', async () => {
     console.log('[WA] Client WhatsApp prêt !');
     clientReady = true;
     qrDataUrl = null;
-
     await findTargetGroup();
 });
 
-// Recherche du groupe cible.
-// getChats() echoue via getChatModel() sur les groupes : whatsapp-web.js
-// appelle groupMetadata.update(), qui leve une DataError IndexedDB
-// ("No key or key range specified") pour la plupart des chats. On resolve
-// donc le groupe directement dans la page, via le modele brut, sans passer
-// par getChatModel() : on identifie un groupe par son identifiant "@g.us".
 async function findTargetGroup() {
     try {
         const found = await client.pupPage.evaluate((wanted) => {
@@ -133,11 +121,6 @@ client.on('auth_failure', (msg) => {
     console.error('[WA] Échec d\'authentification WhatsApp :', msg);
 });
 
-// Nom d'un chat, resolu directement dans la page.
-// getChatById() / getChats() passent par getChatModel(), qui appelle
-// groupMetadata.update() : cet appel echoue avec une DataError IndexedDB
-// ("No key or key range specified") sur la plupart des chats, et fait donc
-// echouer getChats() en entier. On interroge directement le modele brut.
 async function getChatNameInPage(chatId) {
     try {
         return await client.pupPage.evaluate((id) => {
@@ -156,10 +139,6 @@ async function getChatNameInPage(chatId) {
 }
 
 client.on('message_create', async (msg) => {
-    // --- Logs détaillés pour le débogage ---
-    // Attention : msg.from est l'EXPEDITEUR (ex. 108151672152246@lid), pas la
-    // conversation. Dans un groupe, c'est msg.to qui porte l'identifiant du
-    // groupe ("...@g.us"). On utilise donc msg.to pour cibler le groupe.
     const body = (msg.body || '').trim();
     const chatId = (msg.fromMe ? msg.to : msg.from) || msg.from || '';
     console.log('[WA][MSG] chat=' + chatId + ' | from=' + (msg.from || '?') +
@@ -180,14 +159,12 @@ client.on('message_create', async (msg) => {
     }
 
     if (!targetGroupId) {
-        // Résolution directe du chat dans la page : getChatById() passe par
-        // getChatModel() qui échoue sur l'IndexedDB pour les groupes.
         const chatNom = await getChatNameInPage(chatId);
         if (chatNom === WHATSAPP_GROUP) {
             targetGroupId = chatId;
             console.log('[WA] Groupe cible découvert :', WHATSAPP_GROUP, '(' + targetGroupId + ')');
         } else {
-            console.log('[WA][MSG] ignoré (chat "' + chatNom + '" ne correspond pas à "' + WHATSAPP_GROUP + '")');
+            console.log('[WA][MSG] ignoré (chat "' + chatNom + '" ne correspond pas à "' + WHATSAPP_GROUP + '"');
             return;
         }
     }
@@ -197,41 +174,66 @@ client.on('message_create', async (msg) => {
         return;
     }
 
-    const parts = text.slice(1).split(/\s+/);
-    const cmd = parts[0].toLowerCase();
-    const validCmds = ['notes', 'moyennes', 'recent', 'check', 'sync', 'help', '2fa'];
-
-    if (!validCmds.includes(cmd)) {
-        await msg.reply(BOT_TAG + '❓ Commande inconnue. Tapez *!help* pour la liste des commandes.');
+    const parsed = parseCommand(text);
+    if (!parsed) {
+        return;
+    }
+    const { cmd, args, error } = parsed;
+    if (error) {
+        await msg.reply(BOT_TAG + error);
         return;
     }
 
     if (cmd === 'help') {
         const helpText =
-            '*🎓 Edbot — Notes EcoleDirecte*\n\n' +
+            '*\u27a3 Edbot — Notes EcoleDirecte*\n\n' +
             '*!notes* — moyennes + dernières notes\n' +
             '*!moyennes* — moyennes par matière\n' +
             '*!recent* — 10 dernières notes\n' +
             '*!check* — forcer une vérification immédiate\n' +
+            '*!messages* — dernier message EcoleDirecte\n' +
             '*!sync* — archiver les nouveaux documents\n' +
-            '*!2fa <n>* — répondre à la vérification de sécurité\n\n' +
-            'Le bot répond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';
+            '*!2fa <n>* — répondre à la vérification de sécurité ' +
+            '(confirmation exigée : *!2fa <n> confirm*)\n' +
+            '*!2fa reset* — réarmer la vérification de sécurité ' +
+            '(après déblocage manuel du compte ED)\n\n' +
+            'Le bot répond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';;
         await msg.reply(BOT_TAG + helpText);
         return;
     }
 
-    // Réponse à la vérification de sécurité : "!2fa 3"
-    const args = [];
-    if (cmd === '2fa') {
-        const n = parseInt(parts[1], 10);
-        if (!Number.isFinite(n)) {
-            await msg.reply(BOT_TAG + '❓ Réponse invalide. Usage : *!2fa <numéro>*');
-            return;
-        }
-        args.push(String(n));
-    }
-
     await msg.reply(BOT_TAG + '🔎 Traitement de la commande *!' + cmd + '*…');
+
+    if (cmd === 'messages') {
+        await msg.reply(BOT_TAG + '🔎 Récupération du dernier message EcoleDirecte…');
+        const python_cmd = [path.join(APP_DIR, 'edbot_cmd.py'), 'messages'];
+        execFile(
+            'python3',
+            python_cmd.concat(args),
+            {
+                cwd: APP_DIR,
+                timeout: 180000,
+                env: { ...process.env }
+            },
+            (error, stdout, stderr) => {
+                if (error) {
+                    console.error('[WA] Erreur exécution Python :', error);
+                    msg.reply(BOT_TAG + '⚠️ Erreur lors de l\'exécution de la commande.');
+                    return;
+                }
+                if (stderr) {
+                    console.error('[WA] Stderr Python :', stderr);
+                }
+                const output = stdout.trim() || 'Aucune réponse.';
+                const maxLen = 3800;
+                const reply = output.length > maxLen
+                    ? output.slice(0, maxLen) + '\n… (message tronqué)'
+                    : output;
+                msg.reply(BOT_TAG + reply);
+            }
+        );
+        return;
+    }
 
     execFile(
         'python3',
@@ -286,9 +288,6 @@ client.on('error', (err) => {
 });
 
 // --- Demarrage ---
-// initialize() est asynchrone et rejectait silencieusement jusqu'ici :
-// toute erreur (ex. cache web non inscriptible) laissait le bot bloque
-// sans le moindre message dans les logs.
 (async () => {
     try {
         await client.initialize();

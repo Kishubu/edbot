@@ -4,6 +4,15 @@
 # Identifiants du compte PARENT (ceux du site / de l'appli).
 identifiant =
 motdepasse =
+# --- Garde-fous de sécurité (2FA) ---------------------------------------
+# EcoleDirecte verrouille le compte parental sur UNE SEULE mauvaise réponse
+# à la question de sécurité. Après un refus, le bot se met en pause et ne
+# retente RIEN (aucune proposition n'est renvoyée) pendant ce délai.
+# Cooldown après une réponse refusée, en heures (défaut : 24).
+twofa_cooldown_hours = 24
+# Rappel (en heures) après un compte détecté bloqué par le serveur ED.
+# 0 = pas de rappel. Le blocage ne se lève que par un reset manuel.
+twofa_blocage_hours = 0
 
 [whatsapp]
 # Nom du groupe WhatsApp surveillé par le bot.
@@ -17,12 +26,4 @@ outage_alert_hours = 24
 # Mot de passe refusé signalé seulement après ce nombre de minutes de refus continu.
 auth_alert_minutes = 60
 
-# Section FACULTATIVE : transfert de la messagerie École Directe par mail (Gmail).
-# Supprimer toute la section pour désactiver.
-[mail]
-# Adresse Gmail expéditrice.
-smtp_user =
-# Mot de passe d'APPLICATION Gmail (compte Google > Sécurité > Mots de passe des applications).
-smtp_password =
-# Destinataire(s), séparés par des virgules.
-destinataire =
+

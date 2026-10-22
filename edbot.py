@@ -23,6 +23,7 @@ import configparser
 import http.cookiejar
 import urllib.request
 import urllib.parse
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Surchargeable par env : en conteneur, config.ini et state.json vivent dans
@@ -42,12 +43,34 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # --------------------------------------------------------------------------- #
 #  Config & state
 # --------------------------------------------------------------------------- #
+
+# Cache de la config, pour que les helpers de garde-fous 2FA (appelés
+# hors de la classe Bot) puissent lire les options [ecoledirecte].
+_CONFIG_CACHE = None
+
+
 def load_config():
+    global _CONFIG_CACHE
     if not os.path.exists(CONFIG_PATH):
         sys.exit(f"Config introuvable : {CONFIG_PATH}")
     cp = configparser.ConfigParser()
     cp.read(CONFIG_PATH)
+    _CONFIG_CACHE = cp
     return cp
+
+
+def _config_opt(section, option, defaut=None):
+    """Lit une option de config (renvoie `defaut` si absente)."""
+    cp = _CONFIG_CACHE
+    if cp is None:
+        try:
+            cp = load_config()
+        except SystemExit:
+            return defaut
+    try:
+        return cp.get(section, option)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return defaut
 
 
 def load_state():
@@ -59,7 +82,208 @@ def load_state():
             pass
     return {"cn": None, "cv": None, "twofa_answers": {},
             "seen_notes": [], "last_poll": 0, "initialized": False,
-            "tg_offset": 0}
+            "tg_offset": 0  # legacy Telegram
+        }
+
+
+# --------------------------------------------------------------------------- #
+#  Garde-fous 2FA
+#
+#  EcoleDirecte verrouille le compte parental après UNE SEULE mauvaise
+#  réponse à la question de sécurité. D'où les règles suivantes, appliquées
+#  partout (bot Telegram, bot WhatsApp, script CLI) :
+#
+#   1. une réponse mémorisée n'est rejouée QUE si elle figure encore dans les
+#      propositions proposées (ED change l'ordre et le contenu des
+#      propositions ; une réponse hors liste compte comme fausse) ;
+#   2. aucune soumission automatique pendant le polling : une réponse posée
+#      par un humain, ou rejouée avec certitude, uniquement ;
+#   3. après un échec, un cooldown long interdit toute nouvelle soumission ;
+#   4. un compte détecté bloqué gèle définitivement le bot.
+# --------------------------------------------------------------------------- #
+
+def norm2fa(text):
+    """Normalise un texte pour comparer deux propositions 2FA
+    (casse, accents, espaces insécables, apostrophes typographiques)."""
+    if not text:
+        return ""
+    s = unicodedata.normalize("NFKD", str(text))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.replace("\u2019", "'").replace("\u00a0", " ")
+    return " ".join(s.casefold().split())
+
+
+def prop_norm(raw):
+    """Proposition 2FA décodée et normalisée."""
+    return norm2fa(_b64d(raw))
+
+
+# Délais (secondes) — surchargeables via config.ini [ecoledirecte].
+COOLDOWN_DEFAUT = 24 * 3600       # 24 h après un échec de réponse 2FA
+BLOCAGE_DEFAUT = 7 * 24 * 3600    # 7 jours après un compte détecté bloqué
+
+
+def twofa_cooldown(state, defaut=None):
+    """Durée de cooldown après un échec 2FA (secondes).
+
+    Priorité : state > config.ini [ecoledirecte] twofa_cooldown_hours
+    > valeur par défaut (24 h)."""
+    if defaut is None:
+        defaut = COOLDOWN_DEFAUT
+    v = state.get("twofa_cooldown_seconds")
+    if v:
+        return int(v)
+    cfg = _config_opt("ecoledirecte", "twofa_cooldown_hours")
+    if cfg:
+        try:
+            return int(float(cfg) * 3600)
+        except ValueError:
+            pass
+    return int(defaut)
+
+
+def twofa_bloque(state):
+    """Le compte a été détecté bloqué : on ne tente plus rien.
+
+    Le blocage est définitif : il ne se lève qu'au `reset` manuel
+    (`/2fa reset` sur Telegram, `!2fa reset` sur WhatsApp), car le compte
+    École Directe reste verrouillé côté serveur tant qu'il n'a pas été
+    débloqué par un parent."""
+    return bool(state.get("twofa_bloque"))
+
+
+def twofa_duree_blocage(state):
+    """Durée de blocage configurée (secondes), 0 = illimité.
+
+    Sert uniquement à rappeler à l'utilisateur de vérifier le compte
+    École Directe : le blocage n'expire pas tout seul."""
+    v = state.get("twofa_blocage_seconds")
+    if v:
+        return int(v)
+    cfg = _config_opt("ecoledirecte", "twofa_blocage_hours")
+    if cfg:
+        try:
+            return int(float(cfg) * 3600)
+        except ValueError:
+            pass
+    return 0
+
+
+def twofa_cooldown_actif(state, maintenant=None):
+    """Une soumission 2FA est-elle interdite pour l'instant ?"""
+    until = state.get("twofa_cooldown_until") or 0
+    if not until:
+        return False
+    maintenant = maintenant or int(time.time())
+    return maintenant < int(until)
+
+
+def twofa_fige(state):
+    """Le bot est-il gelé (blocage détecté ou cooldown en cours) ?"""
+    return twofa_bloque(state) or twofa_cooldown_actif(state)
+
+
+def twofa_message_fige(state, maintenant=None):
+    """Message expliquant pourquoi aucune soumission 2FA n'est possible."""
+    if twofa_bloque(state):
+        return ("⛔ <b>Compte École Directe bloqué</b>\n\n"
+                "Le compte a été verrouillé par École Directe (mauvaise réponse à "
+                "la question de sécurité).\n\n"
+                "Aucune tentative n'est faite tant que tu n'as pas débloqué le "
+                "compte et réinitialisé la protection :\n"
+                "<code>/2fa reset</code>")
+    until = int(state.get("twofa_cooldown_until") or 0)
+    maintenant = maintenant or int(time.time())
+    reste = max(0, until - maintenant)
+    return ("⏳ <b>Vérification de sécurité en pause</b>\n\n"
+            f"Une réponse a été refusée récemment : nouvelle tentative possible "
+            f"dans {_duree(reste)}.\n\n"
+            "Le compte se bloque sur une seule mauvaise réponse : on ne tente "
+            "plus rien tout seul.")
+
+
+def twofa_trouver_reponse(state, question, propositions):
+    """Cherche dans `propositions` la réponse mémorisée pour `question`.
+
+    Renvoie la proposition brute (base64) ou None.
+
+    Sécurité : si la réponse mémorisée n'est PLUS proposée par le serveur,
+    elle est considérée comme fausse et n'est PAS jouée (une réponse hors
+    liste = blocage du compte)."""
+    answers = state.get("twofa_answers") or {}
+    saved = answers.get(question)
+    if not saved:
+        return None
+    cible = prop_norm(saved)
+    for raw in propositions or []:
+        if prop_norm(raw) == cible:
+            return raw
+    print(f"Réponse 2FA mémorisée absente des propositions proposées "
+          f"(question : {question!r}) : elle ne sera PAS rejouée.", flush=True)
+    return None
+
+
+def twofa_memoriser(state, question, raw):
+    """Mémorise une réponse 2FA validée."""
+    state.setdefault("twofa_answers", {})[question] = raw
+
+
+def twofa_echec(state, cooldown=None):
+    """Enregistre un échec de réponse 2FA et arme le cooldown.
+
+    Purge aussi la réponse fautive mémorisée : elle ne doit JAMAIS être
+    rejouée, sinon le compte resterait bloqué."""
+    cooldown = cooldown or twofa_cooldown(state)
+    now = int(time.time())
+    state["twofa_cooldown_until"] = now + cooldown
+    state["twofa_failures"] = int(state.get("twofa_failures") or 0) + 1
+    # Purge de la réponse fautive (question courante en priorité).
+    question = state.get("twofa_current_question")
+    answers = state.get("twofa_answers")
+    if isinstance(answers, dict) and question:
+        answers.pop(question, None)
+    state["last_error"] = "Réponse à la question de sécurité refusée par " \
+                          "École Directe. Nouvelle tentative dans " \
+                          f"{_duree(cooldown)}."
+    save_state(state)
+    print(f"Réponse 2FA refusée : cooldown de {_duree(cooldown)} "
+          f"(échecs : {state['twofa_failures']}).", flush=True)
+
+
+def twofa_reussite(state):
+    """Réinitialise le compteur d'échecs après une réponse acceptée."""
+    state["twofa_failures"] = 0
+    state.pop("twofa_cooldown_until", None)
+    state.pop("twofa_bloque", None)
+    state.pop("twofa_bloque_since", None)
+
+
+def twofa_bloquer(state):
+    """Gèle définitivement le bot : le compte est bloqué par École Directe."""
+    state["twofa_bloque"] = True
+    state["twofa_bloque_since"] = int(time.time())
+    state.pop("twofa_cooldown_until", None)
+    save_state(state)
+
+
+# Marqueurs d'un message serveur annonçant un BLOCAGE DU COMPTE (et non
+# simplement une réponse fausse). La recherche se fait sur le texte
+# normalisé : « bloqué » et « bloque » doivent être reconnus tous les deux,
+# et les accents/casse ignorés.
+MOTS_BLOCAGE = ("bloqu", "bloc", "verrouill", "suspend", "desactiv")
+
+
+def twofa_message_bloquante(message):
+    """Le message renvoyé par École Directe annonce-t-il un blocage ?
+
+    École Directe répond par exemple « Compte bloqué pour trop de
+    tentatives » ou « Accès suspendu ». Un simple test « bloc » ne
+    détectait ni « bloqué » ni « bloque » : un vrai blocage n'était donc
+    repéré que comme une mauvaise réponse (cooldown 24 h au lieu d'un
+    gel définitif), et le bot réessayait indéfiniment.
+    """
+    texte = norm2fa(message)
+    return any(m in texte for m in MOTS_BLOCAGE)
 
 
 def save_state(state):
@@ -133,8 +357,18 @@ class EDSession:
         """
         -> ("ok", accounts)
         -> ("2fa", {"question": str, "propositions": [str], "token": str})
+        -> ("fige", message)   -> cooldown 2FA ou compte bloqué : ne rien tenter
         -> ("error", message)
         """
+        # Garde-fou 2 : après un échec de réponse 2FA, ou si le compte est
+        # bloqué, on ne présente plus aucune question : ni rejeu automatique,
+        # ni proposition à l'utilisateur (il risquerait de rejouer la même
+        # réponse et de refaire bloquer le compte).
+        if twofa_bloque(self.state):
+            return "fige", twofa_message_fige(self.state)
+        if twofa_cooldown_actif(self.state):
+            return "fige", twofa_message_fige(self.state)
+
         fa = None
         if self.state.get("cn") and self.state.get("cv"):
             fa = [{"cn": self.state["cn"], "cv": self.state["cv"]}]
@@ -155,13 +389,27 @@ class EDSession:
             qd = q.get("data", {})
             question = _b64d(qd.get("question", ""))
             props = qd.get("propositions", [])
-            # Réponse déjà connue ? -> on tente direct.
-            saved = self.state.get("twofa_answers", {}).get(question)
+            # Mémorise la question courante : elle sert à purger la réponse
+            # memorisée si elle s'avère fausse.
+            self.state["twofa_current_question"] = question
+            # Réponse déjà connue ET toujours proposée -> on tente direct.
+            # (une réponse mémorisée absente des propositions n'est JAMAIS
+            # rejouée : elle compterait comme une mauvaise réponse, donc
+            # comme un blocage du compte.)
+            saved = twofa_trouver_reponse(self.state, question, props)
             if saved:
                 res = self.submit_2fa(token, saved)
                 if res[0] == "ok":
                     return res
-                # sinon on retombe sur la demande interactive
+                if res[0] == "fige":
+                    return res
+                if res[0] == "erreur":
+                    # Panne réseau : ce n'est pas une mauvaise réponse, le
+                    # cooldown n'est pas armé. On remonte l'erreur telle quelle.
+                    return "error", res[1]
+                # Réponse refusée : on NE redemande pas la question à
+                # l'utilisateur (risque de nouvelle mauvaise réponse).
+                return "fige", res[1] + "\n\n" + twofa_message_fige(self.state)
             return "2fa", {"question": question, "propositions": props,
                            "token": token}
 
@@ -170,19 +418,54 @@ class EDSession:
         return "error", f"Échec connexion (code {code}) : {body.get('message')}"
 
     def submit_2fa(self, token, chosen_raw):
-        ans = self.post(f"/v3/connexion/doubleauth.awp?verbe=post&v={ED_VERSION}",
-                        {"choix": chosen_raw}, token=token, fa_token=token)
+        """Envoie une réponse à la question de sécurité.
+
+        Renvoie :
+          ("ok", accounts)
+          ("refus", message)   -> réponse fausse : cooldown + alerte
+          ("fige", message)    -> cooldown actif ou compte bloqué : rien n'est envoyé
+          ("erreur", message)  -> erreur réseau / serveur : sans conséquence
+        """
+        # Garde-fou 1 : aucune soumission pendant un cooldown, ni si le
+        # compte est bloqué. Une seule mauvaise réponse verrouille le compte.
+        if twofa_bloque(self.state):
+            return "fige", twofa_message_fige(self.state)
+        if twofa_cooldown_actif(self.state):
+            return "fige", twofa_message_fige(self.state)
+
+        try:
+            ans = self.post(
+                f"/v3/connexion/doubleauth.awp?verbe=post&v={ED_VERSION}",
+                {"choix": chosen_raw}, token=token, fa_token=token)
+        except Exception as e:
+            # Erreur réseau : la réponse n'a pas été traitée par le serveur,
+            # ce n'est donc pas une mauvaise réponse. On n'arme PAS le cooldown.
+            return "erreur", f"EcoleDirecte ne répond pas : {e}"
+
         if ans.get("code") != 200:
-            return "error", f"Réponse 2FA refusée (code {ans.get('code')})"
+            # Le serveur a bien reçu la réponse et l'a refusée : c'est une
+            # mauvaise réponse -> cooldown long, et purge de la réponse
+            # mémorisée (elle est fausse).
+            msg = str(ans.get("message") or "").lower()
+            if twofa_message_bloquante(msg):
+                twofa_bloquer(self.state)
+                return "refus", ("⛔ Compte École Directe bloqué par le serveur "
+                                 f"({ans.get('code')}) : {ans.get('message')}")
+            self.state.get("twofa_answers", {}).pop(
+                self.state.get("twofa_current_question", ""), None)
+            twofa_echec(self.state)
+            return "refus", (f"Réponse 2FA refusée (code {ans.get('code')}) : "
+                             f"{ans.get('message')}")
         cn = ans["data"]["cn"]
         cv = ans["data"]["cv"]
         self.state["cn"] = cn
         self.state["cv"] = cv
+        twofa_reussite(self.state)
         body = self._do_login(fa=[{"cn": cn, "cv": cv}])
         if body.get("code") == 505:
             return "auth", "Identifiant ou mot de passe incorrect (505)."
         if body.get("code") != 200:
-            return "error", f"Re-login échoué (code {body.get('code')})"
+            return "erreur", f"Re-login échoué (code {body.get('code')})"
         self.token = body.get("token")
         return "ok", body.get("data", {}).get("accounts", [])
 
@@ -311,494 +594,9 @@ def fmt_recent(eleve, data, limit=10):
 # --------------------------------------------------------------------------- #
 #  API Telegram (stdlib)
 # --------------------------------------------------------------------------- #
-class Telegram:
-    def __init__(self, token):
-        self.base = f"https://api.telegram.org/bot{token}"
 
-    def call(self, method, params=None, timeout=35):
-        data = urllib.parse.urlencode(params or {}).encode()
-        req = urllib.request.Request(f"{self.base}/{method}", data=data)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except Exception as e:  # réseau, timeout...
-            return {"ok": False, "error": str(e)}
-
-    def get_updates(self, offset, timeout=30):
-        return self.call("getUpdates",
-                         {"offset": offset, "timeout": timeout},
-                         timeout=timeout + 5)
-
-    def send(self, chat_id, text, reply_markup=None):
-        params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": "true"}
-        if reply_markup:
-            params["reply_markup"] = json.dumps(reply_markup)
-        # Telegram limite à 4096 caractères -> on tronçonne.
-        for chunk in _split(text, 3900):
-            params["text"] = chunk
-            self.call("sendMessage", params)
-            params.pop("reply_markup", None)
-
-    def answer_callback(self, cb_id, text=""):
-        self.call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text})
-
-
-def _split(text, size):
-    if len(text) <= size:
-        return [text]
-    parts, cur = [], ""
-    for line in text.split("\n"):
-        if len(cur) + len(line) + 1 > size:
-            parts.append(cur)
-            cur = ""
-        cur += line + "\n"
-    if cur:
-        parts.append(cur)
-    return parts
 
 
 # --------------------------------------------------------------------------- #
 #  Bot
 # --------------------------------------------------------------------------- #
-class Bot:
-    def __init__(self):
-        self.cfg = load_config()
-        self.state = load_state()
-        self.tg = Telegram(self.cfg["telegram"]["bot_token"].strip())
-        self.allowed = {c.strip() for c in
-                        str(self.cfg["telegram"].get("allowed_chats", "")).split(",")
-                        if c.strip()}
-        nc = str(self.cfg["telegram"].get("notify_chat", "")).strip()
-        if not nc and self.allowed:
-            nc = sorted(self.allowed)[0]
-        self.notify_chat = nc
-        self.interval = int(self.cfg["notifications"].get(
-            "poll_interval_minutes", "60")) * 60
-        self.outage_alert = int(float(self.cfg["notifications"].get(
-            "outage_alert_hours", "24")) * 3600)
-        self.auth_alert = int(float(self.cfg["notifications"].get(
-            "auth_alert_minutes", "60")) * 60)
-        self.ed = EDSession(self.cfg["ecoledirecte"]["identifiant"],
-                            self.cfg["ecoledirecte"]["motdepasse"], self.state)
-        self.pending = None  # 2FA en cours : {question, propositions, token, resume}
-
-    # -- helpers --
-    def is_allowed(self, chat_id):
-        return not self.allowed or str(chat_id) in self.allowed
-
-    def notify(self, text, markup=None):
-        if self.notify_chat:
-            self.tg.send(self.notify_chat, text, markup)
-
-    def _notify_error_once(self, text):
-        """Signale une erreur de connexion une seule fois par erreur DISTINCTE
-        — pas à chaque tentative. Sans ça, un échec persistant (ex. code 535
-        "établissement indisponible") spamme le même message toutes les ~30 s
-        indéfiniment, une tentative par tour de boucle."""
-        if self.state.get("last_error") == text:
-            return
-        self.state["last_error"] = text
-        self.notify(text)
-
-    # -- indisponibilité EcoleDirecte --
-    def _outage(self, text, chat_id=None):
-        """EcoleDirecte ne répond pas ou répond en erreur (réseau, HTTP 5xx,
-        code 535 « établissement indisponible », code inconnu...). Ces pannes
-        sont fréquentes et se résorbent seules : on les journalise toujours,
-        mais on ne prévient sur Telegram qu'au-delà de `outage_alert_hours`
-        (24 h par défaut) d'échecs ininterrompus, une seule fois, puis au
-        retour. Une commande manuelle (chat_id) reçoit en revanche toujours
-        une réponse immédiate.
-
-        Compte aussi comme une tentative (last_poll) : sans ça, le polling
-        automatique réessaierait à chaque tour de la boucle principale (~30 s)
-        au lieu de respecter l'intervalle configuré."""
-        now = int(time.time())
-        since = self.state.get("outage_since") or now
-        self.state["outage_since"] = since
-        self.state["last_poll"] = now
-        print(f"EcoleDirecte en échec (depuis {_duree(now - since)}) : {text}",
-              flush=True)
-        if chat_id:
-            self.tg.send(chat_id, "⚠️ EcoleDirecte ne répond pas, réessaie plus "
-                                  "tard.\n" + html.escape(text))
-        if now - since >= self.outage_alert and not self.state.get("outage_notified"):
-            self.state["outage_notified"] = True
-            self.notify(f"⚠️ <b>EcoleDirecte en échec depuis {_duree(now - since)}</b>\n\n"
-                        f"Dernière erreur : {html.escape(text)}\n\n"
-                        "Notes et messages ne sont plus suivis en attendant. "
-                        "Je te préviens dès que ça revient.")
-        save_state(self.state)
-
-    def _outage_over(self):
-        since = self.state.pop("outage_since", None)
-        if since is None:
-            return
-        notified = self.state.pop("outage_notified", False)
-        took = _duree(int(time.time()) - since)
-        print(f"EcoleDirecte de nouveau joignable (échecs pendant {took}).", flush=True)
-        if notified:
-            self.notify(f"✅ EcoleDirecte de nouveau joignable (coupure de {took}).")
-        save_state(self.state)
-
-    # -- connexion + 2FA --
-    def login_or_prompt(self, resume, chat_id=None):
-        """Connexion ; si 2FA -> envoie le QCM. resume: callable() à rejouer.
-        chat_id : commande manuelle, qui mérite une réponse même en cas de
-        panne passagère."""
-        try:
-            status, payload = self.ed.ensure_logged_in()
-        except Exception as e:
-            self._outage(f"connexion : {e}", chat_id)
-            return None
-        if status == "ok":
-            if self.state.get("last_error") or "auth_since" in self.state:
-                if self.state.get("auth_since"):
-                    print("EcoleDirecte accepte de nouveau l'authentification.", flush=True)
-                self.state["last_error"] = None
-                self.state.pop("auth_since", None)
-                if self.state.pop("auth_notified", False):
-                    self.notify("✅ EcoleDirecte accepte de nouveau la connexion.")
-                save_state(self.state)
-            return payload
-        if status == "2fa":
-            self.pending = {**payload, "resume": resume}
-            kb = {"inline_keyboard": [
-                [{"text": _b64d(p), "callback_data": f"fa:{i}"}]
-                for i, p in enumerate(payload["propositions"])]}
-            self.notify("🔐 <b>Vérification de sécurité EcoleDirecte</b>\n\n"
-                        + html.escape(payload["question"]), kb)
-            return None
-        if status == "auth":
-            # Mot de passe refusé. ED renvoie parfois un 505 isolé (la nuit
-            # surtout) alors que la tentative suivante passe : on ne prévient
-            # sur Telegram que si le refus persiste `auth_alert_minutes`
-            # (60 par défaut). Une commande manuelle a sa réponse immédiate.
-            now = int(time.time())
-            since = self.state.get("auth_since") or now
-            self.state["auth_since"] = since
-            print(f"EcoleDirecte refuse l'authentification (depuis "
-                  f"{_duree(now - since)}) : {payload}", flush=True)
-            if now - since >= self.auth_alert and not self.state.get("auth_notified"):
-                self.state["auth_notified"] = True
-                self.notify(f"🔑 <b>EcoleDirecte refuse la connexion depuis "
-                            f"{_duree(now - since)}</b>\n\n{html.escape(str(payload))}")
-            elif chat_id:
-                self.tg.send(chat_id, f"🔑 {html.escape(str(payload))}")
-            self.state["last_poll"] = int(time.time())
-            save_state(self.state)
-            return None
-        self._outage(str(payload), chat_id)
-        return None
-
-    def handle_2fa_choice(self, idx, cb_id):
-        if not self.pending:
-            self.tg.answer_callback(cb_id, "Aucune question en attente.")
-            return
-        p = self.pending
-        if idx < 0 or idx >= len(p["propositions"]):
-            self.tg.answer_callback(cb_id, "Choix invalide.")
-            return
-        chosen_raw = p["propositions"][idx]
-        self.tg.answer_callback(cb_id, "Validation…")
-        try:
-            status, payload = self.ed.submit_2fa(p["token"], chosen_raw)
-        except Exception as e:
-            status, payload = "error", f"EcoleDirecte ne répond pas : {e}"
-        if status != "ok":
-            print(f"Vérification de sécurité en échec : {payload}", flush=True)
-            self.notify(f"⚠️ {html.escape(str(payload))}")
-            self.pending = None
-            return
-        # On mémorise la réponse pour la prochaine fois.
-        self.state.setdefault("twofa_answers", {})[p["question"]] = chosen_raw
-        save_state(self.state)
-        self.notify("✅ Vérification réussie.")
-        resume = p["resume"]
-        self.pending = None
-        if resume:
-            resume(payload)  # payload = accounts
-
-    # -- actions notes --
-    def cmd_notes(self, chat_id, kind):
-        def resume(accounts):
-            self._send_notes(chat_id, accounts, kind)
-        accounts = self.login_or_prompt(resume, chat_id)
-        if accounts is not None:
-            self._send_notes(chat_id, accounts, kind)
-
-    def _send_notes(self, chat_id, accounts, kind):
-        eleves = eleves_from_accounts(accounts)
-        if not eleves:
-            self.tg.send(chat_id, "Aucun élève trouvé.")
-            return
-        for el in eleves:
-            data = self.ed.fetch_notes(el.get("id"))
-            if not data:
-                self.tg.send(chat_id, f"Notes indisponibles pour "
-                                      f"{html.escape(el.get('prenom',''))}.")
-                continue
-            if kind == "moyennes":
-                self.tg.send(chat_id, fmt_moyennes(el, data))
-            elif kind == "recent":
-                self.tg.send(chat_id, fmt_recent(el, data))
-            else:  # notes complètes = moyennes + récentes
-                self.tg.send(chat_id, fmt_moyennes(el, data))
-                self.tg.send(chat_id, fmt_recent(el, data, limit=15))
-
-    # -- sync documents vers le partage --
-    def cmd_sync(self, chat_id):
-        def resume(accounts):
-            self._run_sync(chat_id, accounts)
-        accounts = self.login_or_prompt(resume, chat_id)
-        if accounts is not None:
-            self._run_sync(chat_id, accounts)
-
-    def _run_sync(self, chat_id, accounts):
-        import edsync  # import tardif : évite l'import circulaire à l'init
-        try:
-            res = edsync.run_sync(self.ed, accounts, log=lambda m: None)
-        except Exception as e:
-            self.tg.send(chat_id, "⚠️ Sync échouée : " + html.escape(str(e)))
-            return
-        new = res["new"]
-        lines = ["<b>✅ Sync EcoleDirecte terminée</b>",
-                 "📁 <b>%d</b> nouveau(x) · %d déjà présents · %d au total"
-                 % (len(new), res["existing"], res["total"])]
-        if new:
-            groups = {}
-            for d in new:
-                groups.setdefault((d.get("eleve", "Famille"), d["annee"], d["categorie"]), []).append(d)
-            for (eleve, annee, cat), docs in sorted(groups.items(), reverse=True):
-                label = edsync.CAT_DIRS.get(cat, cat)
-                lines.append("\n<b>%s — %s — %s</b> (%d)"
-                             % (html.escape(eleve), html.escape(annee),
-                                html.escape(label), len(docs)))
-                for d in docs[:20]:
-                    lines.append("  • %s — %s"
-                                 % (html.escape(str(d.get("date") or "")),
-                                    html.escape(str(d.get("libelle") or ""))))
-        else:
-            lines.append("\nAucun nouveau document.")
-        if res["inscriptions"]:
-            lines.append("\nℹ️ %d doc(s) d'inscription non téléchargeables "
-                         "(à signer) — voir NON_ARCHIVES.txt." % res["inscriptions"])
-        if res["errors"]:
-            lines.append("\n⚠️ %d erreur(s) :" % len(res["errors"]))
-            for e in res["errors"][:5]:
-                lines.append("  • " + html.escape(e))
-        self.tg.send(chat_id, "\n".join(lines))
-
-    # -- polling nouvelles notes --
-    def poll_new_notes(self):
-        def resume(accounts):
-            self._check_new(accounts)
-        accounts = self.login_or_prompt(resume)
-        if accounts is not None:
-            self._check_new(accounts)
-
-    def cmd_check(self, chat_id):
-        """Vérification demandée explicitement : contrairement au polling
-        automatique (silencieux si rien de nouveau, pour ne pas spammer
-        toutes les heures), une demande manuelle mérite toujours une réponse
-        — sinon le seul message visible reste "Vérification en cours…", qui
-        donne l'impression que le bot est bloqué."""
-        def resume(accounts):
-            self._finish_check(chat_id, accounts)
-        accounts = self.login_or_prompt(resume, chat_id)
-        if accounts is not None:
-            self._finish_check(chat_id, accounts)
-
-    def _finish_check(self, chat_id, accounts):
-        new_count = self._check_new(accounts, chat_id)
-        if new_count is None:
-            return  # échec déjà signalé par _outage
-        if new_count:
-            self.tg.send(chat_id, f"✅ Vérification terminée — {new_count} "
-                                  f"nouvelle(s) note(s).")
-        else:
-            self.tg.send(chat_id, "✅ Vérification terminée — aucune nouvelle note.")
-
-    def _check_new(self, accounts, chat_id=None):
-        """Nouvelles notes + transfert des messages. Retourne le nombre de
-        nouvelles notes, ou None si EcoleDirecte a échoué en cours de route
-        (une exception ici remontait jusqu'à la boucle principale sans mettre
-        à jour last_poll : nouvelle tentative toutes les ~35 s, cas du 503 du
-        28/09/2026)."""
-        try:
-            new_count = self._check_new_notes(accounts)
-            ed_errors = self._forward_mail(accounts)
-        except Exception as e:
-            self._outage(str(e), chat_id)
-            return None
-        if ed_errors:
-            self._outage("transfert messagerie : " + "; ".join(ed_errors), chat_id)
-            return new_count
-        self._outage_over()
-        return new_count
-
-    def _check_new_notes(self, accounts):
-        eleves = eleves_from_accounts(accounts)
-        seen = set(self.state.get("seen_notes", []))
-        first_run = not self.state.get("initialized")
-        new_count = 0
-        for el in eleves:
-            data = self.ed.fetch_notes(el.get("id"))
-            if data is None:
-                raise RuntimeError(f"notes de {el.get('prenom', '?')} indisponibles")
-            for n in data.get("notes", []):
-                nid = str(n.get("id"))
-                if nid in seen:
-                    continue
-                # Pas encore de note (compétences seules) : ni annoncé, ni
-                # marqué vu — sinon la note saisie ensuite passe inaperçue
-                # (cas du 29/09/2026 : « /0 » annoncé, puis 9/10 jamais).
-                if not has_note(n):
-                    continue
-                seen.add(nid)
-                if not first_run:
-                    self.notify("🆕 <b>Nouvelle note — "
-                                f"{html.escape(el.get('prenom',''))}</b>\n\n"
-                                + fmt_note_line(n))
-                    new_count += 1
-            self._check_moyenne_generale(el, data)
-        self.state["seen_notes"] = sorted(seen)
-        self.state["initialized"] = True
-        self.state["last_poll"] = int(time.time())
-        save_state(self.state)
-        if first_run:
-            self.notify("✅ Surveillance initialisée. Tu seras notifié des "
-                        "prochaines nouvelles notes.")
-        return new_count
-
-    def _check_moyenne_generale(self, el, data):
-        """Annonce tout changement de la moyenne générale d'une période
-        (onglet « Moyennes » d'ED : recalculée par l'établissement, cf.
-        dateCalcul). Premier passage pour un élève = mémorisation seule.
-        Seule la moyenne de l'élève déclenche ; classe/min/max sont joints."""
-        eid = str(el.get("id"))
-        known = self.state.setdefault("moyennes", {})
-        first_run = eid not in known
-        prev = known.setdefault(eid, {})
-        for p in data.get("periodes", []):
-            if p.get("annuel"):
-                continue
-            ens = p.get("ensembleMatieres", {}) or {}
-            mg = ens.get("moyenneGenerale")
-            if mg in (None, ""):
-                continue
-            pid = str(p.get("idPeriode") or p.get("periode"))
-            old = prev.get(pid)
-            prev[pid] = mg
-            if first_run or old == mg:
-                continue
-            sur = (data.get("parametrage") or {}).get("moyenneSur") or 20
-            self.notify(fmt_moyenne_generale(el, p, ens, old, sur))
-
-    # -- transfert de la messagerie vers une boîte mail --
-    def _forward_mail(self, accounts):
-        """Retourne les erreurs côté EcoleDirecte (traitées comme une
-        indisponibilité par l'appelant). Les erreurs d'envoi du mail (SMTP,
-        mot de passe Gmail) sont, elles, signalées tout de suite. Une
-        exception (liste des messages illisible) remonte à l'appelant."""
-        if not self.cfg.has_section("mail"):
-            return []
-        import edmail  # import tardif, comme edsync
-        res = edmail.run_forward(self.ed, accounts, self.state,
-                                 self.cfg["mail"], log=lambda m: print(m, flush=True))
-        errors = res["errors"]
-        if res["initialized"]:
-            self.notify("📧 Transfert de la messagerie EcoleDirecte activé : "
-                        "les prochains messages reçus seront envoyés par mail.")
-        # Dédup propre au transfert : `last_error` est remis à zéro à chaque
-        # connexion réussie, il ne protégerait pas d'un échec SMTP persistant
-        # (même message d'erreur toutes les heures).
-        text = "\n".join(errors)
-        if text:
-            print("Envoi mail en échec :", text, flush=True)
-        if text and self.state.get("last_mail_error") != text:
-            self.notify("⚠️ Transfert messagerie EcoleDirecte, envoi du mail "
-                        "impossible :\n" + html.escape(text))
-        self.state["last_mail_error"] = text or None
-        save_state(self.state)
-        return res["ed_errors"]
-
-    # -- dispatch --
-    def handle_update(self, upd):
-        if "callback_query" in upd:
-            cb = upd["callback_query"]
-            chat_id = cb["message"]["chat"]["id"]
-            if not self.is_allowed(chat_id):
-                return
-            data = cb.get("data", "")
-            if data.startswith("fa:"):
-                self.handle_2fa_choice(int(data[3:]), cb["id"])
-            return
-
-        msg = upd.get("message") or upd.get("edited_message")
-        if not msg or "text" not in msg:
-            return
-        chat_id = msg["chat"]["id"]
-        text = msg["text"].strip()
-        cmd = text.split()[0].lstrip("/").split("@")[0].lower()
-
-        if cmd in ("start", "help"):
-            self.tg.send(chat_id,
-                         "🎓 <b>Bot Notes EcoleDirecte</b>\n\n"
-                         "/notes — moyennes + dernières notes\n"
-                         "/moyennes — moyennes par matière\n"
-                         "/recent — 10 dernières notes\n"
-                         "/check — forcer une vérification\n"
-                         "/sync — archiver les nouveaux documents sur le partage")
-            return
-
-        if not self.is_allowed(chat_id):
-            self.tg.send(chat_id, "⛔ Accès non autorisé.")
-            return
-
-        if cmd == "notes":
-            self.cmd_notes(chat_id, "notes")
-        elif cmd == "moyennes":
-            self.cmd_notes(chat_id, "moyennes")
-        elif cmd == "recent":
-            self.cmd_notes(chat_id, "recent")
-        elif cmd == "check":
-            self.tg.send(chat_id, "🔎 Vérification en cours…")
-            self.cmd_check(chat_id)
-        elif cmd == "sync":
-            self.tg.send(chat_id, "🔄 Synchronisation des documents…")
-            self.cmd_sync(chat_id)
-        else:
-            self.tg.send(chat_id, "Commande inconnue. /help")
-
-    # -- boucle principale --
-    def run(self):
-        print("Bot démarré.", flush=True)
-        offset = self.state.get("tg_offset", 0)
-        while True:
-            try:
-                # Polling horaire des notes
-                if time.time() - self.state.get("last_poll", 0) >= self.interval \
-                        and not self.pending:
-                    self.poll_new_notes()
-
-                res = self.tg.get_updates(offset, timeout=30)
-                if res.get("ok"):
-                    for upd in res["result"]:
-                        offset = upd["update_id"] + 1
-                        self.state["tg_offset"] = offset
-                        try:
-                            self.handle_update(upd)
-                        except Exception as e:
-                            print("Erreur handle_update:", e, flush=True)
-                    save_state(self.state)
-                else:
-                    time.sleep(3)
-            except Exception as e:
-                print("Erreur boucle:", e, flush=True)
-                time.sleep(5)
-
-
-if __name__ == "__main__":
-    Bot().run()

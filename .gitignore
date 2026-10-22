@@ -1,6 +1,7 @@
 # --- Secrets et configuration sensible (NE JAMAIS versionner) ---
-state/config.ini
-state/state.json
+# Tout le dossier state/ est ignoré : il contient config.ini (identifiants),
+# state.json (jeton, réponses 2FA) et les fichiers de travail du bot.
+state/
 .env
 
 # --- Données générées par le bot ---
@@ -30,7 +31,8 @@ venv/
 .venv/
 
 # --- Docker ---
-.dockerignore
+# .dockerignore est volontairement VERSIONNÉ : sans lui, le build envoie
+# 200 Mo de .wwebjs_auth et de .git dans le contexte de build.
 
 # --- OS ---
 .DS_Store
@@ -55,4 +57,5 @@ WWebJS_session/
 *.session
 
 # --- QR code temporaires ---
-qr-*.pngqr.png
+qr-*.png
+qr.png

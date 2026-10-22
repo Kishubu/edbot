@@ -1,0 +1,36 @@
+# Contexte de build Docker : on n'envoie que le nécessaire.
+# Sans ce fichier, le build transfère ~210 Mo (.wwebjs_auth + .git) au démon
+# Docker, ce qui ralentit fortement la construction de l'image.
+
+# --- Git ---
+.git
+.gitignore
+.dockerignore
+
+# --- Secrets et données de runtime (montés en volumes, jamais dans l'image) ---
+state/
+documents/
+.env
+.wwebjs_auth/
+.wwebjs_cache/
+.home/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Divers ---
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

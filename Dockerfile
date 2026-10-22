@@ -49,16 +49,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Fichiers Python (logique métier École Directe)
-COPY edbot.py edsync.py edmail.py ed2fa.py edbot_cmd.py ./
+COPY edbot.py edsync.py edmsg.py ed2fa.py edbot_cmd.py ./
 COPY config.ini.example state.json.example ./
 COPY API-EcoleDirecte.md README.md ./
+# Tests unitaires (mocks, aucun accès réseau) : ils permettent de vérifier
+# les garde-fous 2FA dans le conteneur sans toucher au compte réel.
+COPY test_twofa_guards.py ./
 
 # Dépendances Node.js (bot WhatsApp)
 COPY whatsapp/package.json ./whatsapp/
 RUN cd whatsapp && npm install
 
 # Code du bot WhatsApp
-COPY whatsapp/index.js ./whatsapp/
+# index.js requiert ./parse : les deux fichiers doivent être copiés.
+COPY whatsapp/index.js whatsapp/parse.js ./whatsapp/
+COPY whatsapp/test_parse.js ./whatsapp/
 
 # Dossiers de données
 RUN mkdir -p state documents .wwebjs_auth .home .wwebjs_cache \

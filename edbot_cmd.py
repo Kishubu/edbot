@@ -74,7 +74,7 @@ def cmd_notes(sess, accounts, kind):
             lines.append(strip_html(ed.fmt_recent(el, data)))
         else:  # notes complètes
             lines.append(strip_html(ed.fmt_moyennes(el, data)))
-            lines.append(strip_html(ed.fmt_recent(el, data, limit=15)))
+            lines.append(strip_html(ed.fmt_recent(el, data, limit=100)))
 
     return '\n\n'.join(lines)
 
@@ -103,7 +103,27 @@ def cmd_check(sess, accounts):
                 lines.append(f'🆕 Nouvelle note — {el.get("prenom", "")}\n{strip_html(ed.fmt_note_line(n))}')
                 new_count += 1
         # Rejoue la détection de changement de moyenne générale (sans notification)
-        sess._check_moyenne_generale(el, data)
+        
+        # Logique de _check_moyenne_generale adaptée (sans Telegram)
+        eid = str(el.get("id"))
+        known = sess.state.setdefault("moyennes", {})
+        first_run = eid not in known
+        prev = known.setdefault(eid, {})
+        for p in data.get("periodes", []):
+            if p.get("annuel"):
+                continue
+            ens = p.get("ensembleMatieres", {}) or {}
+            mg = ens.get("moyenneGenerale")
+            if mg in (None, ""):
+                continue
+            pid = str(p.get("idPeriode") or p.get("periode"))
+            old = prev.get(pid)
+            prev[pid] = mg
+            if first_run or old == mg:
+                continue
+            sur = (data.get("parametrage") or {}).get("moyenneSur") or 20
+            print(f"📈 Moyenne générale changeante pour {el.get('prenom', '?')} : {mg} (was {old}, sur {sur})")
+
 
     sess.state['seen_notes'] = sorted(seen)
     sess.state['initialized'] = True
@@ -160,37 +180,191 @@ HELP_TEXT = (
     '*!moyennes* — moyennes par matière\n'
     '*!recent* — 10 dernières notes\n'
     '*!check* — forcer une vérification immédiate\n'
-    '*!sync* — archiver les nouveaux documents'
+    '*!sync* — archiver les nouveaux documents\n'
+    '*!2fa <n>* — répondre à la question de sécurité '
+    '(confirmation exigée : *!2fa <n> confirm*)\n'
+    '*!2fa reset* — réarmer la vérification de sécurité '
+    '(après déblocage manuel du compte ED)'
+    '*!messages* — dernier message EcoleDirecte\\n'
 )
 
+def cmd_messages(sess, accounts):
+    """Récupère la liste des derniers messages EcoleDirecte via l'API /messages.awp.
 
-def cmd_2fa(sess, state, index):
+    Affiche les 5 derniers messages. L'ED marque les messages comme lus
+    à la lecture.
+    """
+    from edbot import ED_BASE, ED_VERSION, UA
+    import urllib.request
+    import json
+
+    eleves = ed.eleves_from_accounts(accounts)
+    if not eleves:
+        return 'Aucun élève trouvé.'
+    el = eleves[0]
+    eid = str(el.get("id"))
+    payload = {"famille": eid, "eleve": eid}
+    try:
+        req = urllib.request.Request(
+            f"{ED_BASE}/v3/familles/{eid}/messages.awp",
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers={"User-Agent": UA, "Origin": "https://www.ecoledirecte.com", "Referer": "https://www.ecoledirecte.com/"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        return f'⚠️ Erreur récupération messages : {e}'
+    messages = data.get("messages", [])
+    if not messages:
+        return 'Aucun message nouveau.'
+    # Afficher les 5 derniers messages (les plus récents en premier)
+    MAX_DISPLAY = 5
+    recent = messages[-MAX_DISPLAY:][::-1]  # prendre les 5 derniers, inverser pour avoir le plus récent d'abord
+    parts = []
+    parts.append("📨 *" + str(len(messages)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*")
+    for i, last in enumerate(recent):
+        date = last.get("date", "")
+        expediteur = last.get("expediteur", "")
+        corps = last.get("corps", "")
+        entry = "\n\n--- Message " + str(i+1) + " ---\n📅 " + date + "\nDe : " + expediteur + "\n" + corps
+        parts.append(entry)
+    result = "".join(parts)
+    max_len = 3700
+    if len(result) > max_len:
+        result = result[:max_len] + "\n… (truncated)"
+    return result
+
+
+def _duree(secs):
+    """Durée lisible (identique à edbot._duree mais en local)."""
+    secs = max(0, int(secs))
+    if secs < 3600:
+        return f"{secs // 60} min"
+    if secs < 48 * 3600:
+        return f"{secs // 3600} h {secs % 3600 // 60:02d}"
+    return f"{secs // 86400} j {secs % 86400 // 3600} h"
+
+
+def _cooldown_reste(state):
+    """Temps restant de cooldown, en texte."""
+    until = int(state.get('twofa_cooldown_until') or 0)
+    return _duree(until - int(time.time()))
+
+
+def _fige_texte(state):
+    """Message (format WhatsApp) expliquant pourquoi rien n'est envoyé."""
+    if ed.twofa_bloque(state):
+        return ('⛔ *Compte École Directe bloqué*\n\n'
+                'Le compte a été verrouillé par École Directe.\n\n'
+                'Aucune tentative n\'est faite tant que tu n\'as pas débloqué '
+                'le compte et réinitialisé la protection, puis lancé '
+                '*!2fa reset*.')
+    return ('⏳ *Vérification de sécurité en pause*\n\n'
+            f'Une réponse a été refusée récemment : nouvelle tentative possible '
+            f'dans {_cooldown_reste(state)}.\n\n'
+            'Le compte se bloque sur une seule mauvaise réponse : on ne tente '
+            'plus rien tout seul.')
+
+
+def cmd_2fa(sess, state, index, action=None):
     """Répond à la question de sécurité en attente et rejoue la commande.
 
     L'index (1-based) correspond à la proposition affichée par le bot.
+
+    Garde-fous (le compte se bloque sur UNE seule mauvaise réponse) :
+      - aucune soumission si un cooldown est armé ou si le compte est bloqué ;
+      - confirmation explicite obligatoire (`!2fa <n> confirm`) ;
+      - une réponse refusée n'est jamais mémorisée.
+
+    `action` vaut None (1er envoi : on demande confirmation), "confirm"
+    (la réponse est validée et envoyée) ou "cancel" (abandon).
     """
     pending = state.get('pending_2fa')
     if not pending:
         return '❓ Aucune vérification de sécurité en attente.'
+
+    # Garde-fou 1 : cooldown / compte bloqué -> rien n'est envoyé.
+    if ed.twofa_fige(state):
+        return _fige_texte(state)
 
     props = pending.get('propositions', [])
     if not (1 <= index <= len(props)):
         return f'❓ Choix invalide (1 à {len(props)}).'
 
     chosen_raw = props[index - 1]
-    status, payload = sess.submit_2fa(pending['token'], chosen_raw)
-    if status != 'ok':
+    label = ed._b64d(chosen_raw) if chosen_raw else ''
+
+    # Annulation : aucune réponse n'est envoyée, la question est purgée.
+    if action == 'cancel':
         state.pop('pending_2fa', None)
+        ed.save_state(state)
+        return '↩️ Vérification de sécurité annulée : aucune réponse ' \
+               'n\'a été envoyée.'
+
+    # Garde-fou 2 : confirmation explicite. Sans elle, un simple
+    # « !2fa 1 » suffirait à bloquer le compte.
+    if action != 'confirm':
+        pending['confirmed'] = True
+        pending['pending_index'] = index
+        ed.save_state(state)
+        return (f'⚠️ *Confirmation requise*\n\n'
+                f'Réponse sélectionnée : *{label}*\n\n'
+                f'Une seule mauvaise réponse verrouille le compte École Directe.\n'
+                f'Relance avec *!2fa {index} confirm* pour valider, '
+                f'!*2fa {index} cancel* pour annuler.')
+
+    # La confirmation porte sur un numéro : on ne valide que si c'est
+    # exactement celui qui a été annoncé.
+    if pending.get('pending_index') != index:
+        pending['confirmed'] = False
+        ed.save_state(state)
+        attendu = pending.get('pending_index')
+        if attendu is None:
+            # Aucune confirmation en attente : on rappelle la marche à
+            # suivre au lieu d'annoncer un « None ».
+            return (f'❓ Aucune confirmation en attente.\n'
+                    f'Reprends par *!2fa {index}* pour sélectionner la '
+                    f'réponse, puis *!2fa {index} confirm* pour valider.')
+        return (f'❓ Confirmation attendue pour le choix '
+                f'{attendu}. '
+                f'Reprends par *!2fa {attendu} confirm*.')
+
+    state.pop('pending_2fa', None)
+    status, payload = sess.submit_2fa(pending['token'], chosen_raw)
+
+    if status == 'erreur':
+        # Panne réseau : ce n'est pas une mauvaise réponse, rien n'est gelé.
+        ed.save_state(state)
+        return f'⚠️ {payload}'
+
+    if status == 'fige':
+        ed.save_state(state)
+        return _fige_texte(state)
+
+    if status == 'refus':
+        # Mauvaise réponse : elle n'est PAS mémorisée, cooldown armé.
+        # Défense en profondeur : on arme le cooldown ici aussi si la
+        # session ne l'a pas fait.
+        if not ed.twofa_cooldown_actif(state) and not ed.twofa_bloque(state):
+            ed.twofa_echec(state)
+        state.get('twofa_answers', {}).pop(pending['question'], None)
+        ed.save_state(state)
+        return (f'⚠️ *Réponse refusée* : {payload}\n\n'
+                f'⏳ Aucune nouvelle tentative automatique pendant '
+                f'{_cooldown_reste(state)}.')
+
+    if status != 'ok':
         ed.save_state(state)
         return f'⚠️ Réponse refusée : {payload}'
 
     # On mémorise la réponse pour la prochaine fois.
-    state.setdefault('twofa_answers', {})[pending['question']] = chosen_raw
-    state.pop('pending_2fa', None)
+    ed.twofa_memoriser(state, pending['question'], chosen_raw)
     ed.save_state(state)
 
     resume_cmd = pending.get('command', 'notes')
-    accounts = payload.get('data', {}).get('accounts', [])
+    accounts = payload if isinstance(payload, list) else \
+        payload.get('data', {}).get('accounts', [])
     if resume_cmd in ('notes', 'moyennes', 'recent'):
         body = cmd_notes(sess, accounts, resume_cmd)
     elif resume_cmd == 'check':
@@ -222,15 +396,47 @@ def main():
 
     # --- Commande de réponse au 2FA (cas particulier : geree avant login) ---
     if cmd == '2fa':
+        args = sys.argv[2:]
+        # `!2fa reset` : réarme la vérification de sécurité (après un
+        # déblocage manuel du compte École Directe).
+        if args and args[0].lower() == 'reset':
+            state.pop('twofa_cooldown_until', None)
+            state.pop('twofa_bloque', None)
+            state.pop('twofa_bloque_since', None)
+            state['twofa_failures'] = 0
+            state['twofa_answers'] = {}
+            state['cn'] = None
+            state['cv'] = None
+            state.pop('pending_2fa', None)
+            ed.save_state(state)
+            print('✅ Vérification de sécurité réarmée.\n\n'
+                  'Les réponses mémorisées ont été effacées : la prochaine '
+                  'connexion reposera la question, et la réponse sera '
+                  'demandée par confirmation explicite.')
+            return
         try:
-            idx = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+            idx = int(args[0]) if args else 0
         except ValueError:
-            print('❓ Réponse invalide. Usage : !2fa <numéro>')
+            idx = 0
+        if idx < 1:
+            print('❓ Réponse invalide. Usage : !2fa <numéro> '
+                  '[confirm|cancel]')
             sys.exit(1)
-        print(cmd_2fa(sess, state, idx))
+        action = None
+        if len(args) > 1:
+            action = args[1].strip().lower()
+            if action not in ('confirm', 'cancel'):
+                print('❓ Action invalide. Usage : !2fa <numéro> '
+                      '[confirm|cancel]')
+                sys.exit(1)
+        print(cmd_2fa(sess, state, idx, action))
         return
 
     status, payload = sess.ensure_logged_in()
+    if status == 'fige':
+        # Cooldown 2FA ou compte bloqué : rien n'est envoyé à ED.
+        print(_fige_texte(state))
+        sys.exit(0)
     if status == '2fa':
         # On memorise la question en cours et la commande a rejouer, puis on
         # demande a l'utilisateur de repondre avec !2fa <numero>.
@@ -249,19 +455,33 @@ def main():
             except Exception:
                 valeur = p
             lignes.append(f'{i}. {valeur}')
-        lignes += ['', 'Réponds avec *!2fa <numéro>* (numéro de la bonne réponse).']
+        lignes += ['', 'Réponds avec *!2fa <numéro>* (numéro de la bonne '
+                   'réponse).', '',
+                   '⚠️ Une seule mauvaise réponse verrouille le compte : une '
+                   'confirmation te sera demandée avant tout envoi.']
         print('\n'.join(lignes))
         sys.exit(0)
+
+    if status == 'auth':
+        print(f'🔑 {payload}')
+        sys.exit(1)
 
     if status != 'ok':
         print(f'❌ Connexion École Directe échouée : {payload}')
         sys.exit(1)
 
     ed.save_state(state)
-    accounts = payload.get('data', {}).get('accounts', [])
+    # ensure_logged_in() renvoie la LISTE des comptes (et non un dict) :
+    # on accepte les deux formes pour rester tolérant.
+    if isinstance(payload, list):
+        accounts = payload
+    else:
+        accounts = (payload or {}).get('data', {}).get('accounts', [])
 
     if cmd in ('notes', 'moyennes', 'recent'):
         result = cmd_notes(sess, accounts, cmd)
+    elif cmd == 'messages':
+        result = cmd_messages(sess, accounts)
     elif cmd == 'check':
         result = cmd_check(sess, accounts)
     elif cmd == 'sync':
