@@ -77,3 +77,16 @@ function parseCommand(text) {
 }
 
 module.exports = { parseCommand, VALID_CMDS, VALID_2FA_ACTIONS };
+
+/**
+ * Retourne true si le texte est une requete en langage naturel
+ * (c'est-a-dire qui ne commence pas par le prefixe de commande "!").
+ */
+function isNaturalLanguage(text) {
+    if (typeof text !== 'string') {
+        return false;
+    }
+    return text.trim().length > 0 && !text.trim().startsWith('!');
+}
+
+module.exports.isNaturalLanguage = isNaturalLanguage;

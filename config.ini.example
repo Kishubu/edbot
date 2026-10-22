@@ -26,4 +26,16 @@ outage_alert_hours = 24
 # Mot de passe refusé signalé seulement après ce nombre de minutes de refus continu.
 auth_alert_minutes = 60
 
+[llm]
+# Clé API Venice.ai (requise pour le mode agentique / langage naturel).
+venice_api_key =
+# URL de l'API Venice (par défaut).
+venice_base_url = https://api.venice.ai/api/v1
+# Modèle à utiliser (défaut : nvidia-nemotron-3-nano-30b-a3b).
+venice_model = nvidia-nemotron-3-nano-30b-a3b
+# Température (0 = déterministe, 1 = créatif).
+temperature = 0.3
+# Activer le mode agentique (langage naturel via WhatsApp).
+agent_enabled = true
+
 
