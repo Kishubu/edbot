@@ -50,11 +50,13 @@ WORKDIR /app
 
 # Fichiers Python (logique métier École Directe)
 COPY edbot.py edsync.py edmsg.py ed2fa.py edbot_cmd.py ./
+COPY edllm.py edagent.py ./
 COPY config.ini.example state.json.example ./
 COPY API-EcoleDirecte.md README.md ./
 # Tests unitaires (mocks, aucun accès réseau) : ils permettent de vérifier
 # les garde-fous 2FA dans le conteneur sans toucher au compte réel.
 COPY test_twofa_guards.py ./
+COPY test_venice_client.py test_agent.py ./
 
 # Dépendances Node.js (bot WhatsApp)
 COPY whatsapp/package.json ./whatsapp/

@@ -170,79 +170,77 @@ client.on('message_create', async (msg) => {
     }
 
     const text = (msg.body || '').trim();
-    if (!text.startsWith('!')) {
+    if (!text) {
         return;
     }
 
-    const parsed = parseCommand(text);
-    if (!parsed) {
-        return;
+    // Indiquer que le bot est en train d'ecrire (prise en compte du message)
+    try {
+        const chat = await msg.getChat();
+        await chat.sendStateTyping();
+    } catch (e) {
+        console.error('[WA] Erreur envoi etat typing :', e && e.message ? e.message : e);
     }
-    const { cmd, args, error } = parsed;
-    if (error) {
-        await msg.reply(BOT_TAG + error);
+
+    // --- Commande directe !xxx (comportement existant) ---
+    if (text.startsWith('!')) {
+        const parsed = parseCommand(text);
+        if (!parsed) {
+            return;
+        }
+        const { cmd, args, error } = parsed;
+        if (error) {
+            await msg.reply(BOT_TAG + error);
+            return;
+        }
+        await _runDirectCommand(msg, cmd, args);
         return;
     }
 
+    // --- Langage naturel -> agent LLM (edagent.py) ---
+    await _runNaturalLanguage(msg, text);
+});
+
+
+// --- Fonction auxiliaire : execution d'une commande directe !xxx ---
+async function _runDirectCommand(msg, cmd, args) {
+    // help est gere en direct (pas besoin de lancer edbot_cmd.py)
     if (cmd === 'help') {
         const helpText =
             '*\u27a3 Edbot — Notes EcoleDirecte*\n\n' +
-            '*!notes* — moyennes + dernières notes\n' +
-            '*!moyennes* — moyennes par matière\n' +
-            '*!recent* — 10 dernières notes\n' +
-            '*!check* — forcer une vérification immédiate\n' +
+            '*!notes* — moyennes + dernieres notes\n' +
+            '*!moyennes* — moyennes par matiere\n' +
+            '*!recent* — 10 dernieres notes\n' +
+            '*!check* — forcer une verification immediate\n' +
             '*!messages* — dernier message EcoleDirecte\n' +
             '*!sync* — archiver les nouveaux documents\n' +
-            '*!2fa <n>* — répondre à la vérification de sécurité ' +
+            '*!2fa <n>* — repondre a la verification de securite ' +
             '(confirmation exigée : *!2fa <n> confirm*)\n' +
-            '*!2fa reset* — réarmer la vérification de sécurité ' +
+            '*!2fa reset* — rearmer la verification de securite ' +
             '(après déblocage manuel du compte ED)\n\n' +
-            'Le bot répond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';;
+            'Le bot repond uniquement dans le groupe *' + WHATSAPP_GROUP + '*';
         await msg.reply(BOT_TAG + helpText);
         return;
     }
 
     await msg.reply(BOT_TAG + '🔎 Traitement de la commande *!' + cmd + '*…');
 
+    const python_cmd = [path.join(APP_DIR, 'edbot_cmd.py'), cmd].concat(args);
+    const opts = {
+        cwd: APP_DIR,
+        timeout: 180000,
+        env: { ...process.env }
+    };
+
+    // Cas particulier : messages affiche un message intermediaire
     if (cmd === 'messages') {
         await msg.reply(BOT_TAG + '🔎 Récupération du dernier message EcoleDirecte…');
-        const python_cmd = [path.join(APP_DIR, 'edbot_cmd.py'), 'messages'];
-        execFile(
-            'python3',
-            python_cmd.concat(args),
-            {
-                cwd: APP_DIR,
-                timeout: 180000,
-                env: { ...process.env }
-            },
-            (error, stdout, stderr) => {
-                if (error) {
-                    console.error('[WA] Erreur exécution Python :', error);
-                    msg.reply(BOT_TAG + '⚠️ Erreur lors de l\'exécution de la commande.');
-                    return;
-                }
-                if (stderr) {
-                    console.error('[WA] Stderr Python :', stderr);
-                }
-                const output = stdout.trim() || 'Aucune réponse.';
-                const maxLen = 3800;
-                const reply = output.length > maxLen
-                    ? output.slice(0, maxLen) + '\n… (message tronqué)'
-                    : output;
-                msg.reply(BOT_TAG + reply);
-            }
-        );
-        return;
     }
 
     execFile(
         'python3',
-        [path.join(APP_DIR, 'edbot_cmd.py'), cmd].concat(args),
-        {
-            cwd: APP_DIR,
-            timeout: 180000,
-            env: { ...process.env }
-        },
+        python_cmd,
+        opts,
         (error, stdout, stderr) => {
             if (error) {
                 console.error('[WA] Erreur exécution Python :', error);
@@ -260,7 +258,45 @@ client.on('message_create', async (msg) => {
             msg.reply(BOT_TAG + reply);
         }
     );
-});
+}
+
+// --- Fonction auxiliaire : langage naturel via l'agent LLM ---
+async function _runNaturalLanguage(msg, text) {
+    const agentScript = path.join(APP_DIR, 'edagent.py');
+    execFile(
+        'python3',
+        [agentScript, text],
+        {
+            cwd: APP_DIR,
+            timeout: 60000,
+            env: { ...process.env }
+        },
+        (error, stdout, stderr) => {
+            if (error) {
+                console.error('[WA] Erreur agent LLM :', error);
+                msg.reply(BOT_TAG + '⚠️ L\'assistant IA est temporairement indisponible.');
+                return;
+            }
+            if (stderr) {
+                console.error('[WA] Stderr agent LLM :', stderr);
+            }
+            const output = (stdout || '').trim();
+            if (!output) {
+                msg.reply(BOT_TAG + 'Je n\'ai pas compris ta demande.');
+                return;
+            }
+
+            // L'agent signale qu'il attend une reponse 2FA de l'utilisateur.
+            if (output.startsWith('__EDAGENT_ATTEND_2FA__')) {
+                const reponse2fa = output.slice('__EDAGENT_ATTEND_2FA__'.length).trim();
+                msg.reply(BOT_TAG + reponse2fa);
+                return;
+            }
+
+            msg.reply(BOT_TAG + output);
+        }
+    );
+}
 
 // --- Ecouteurs d'etat pour debogage ---
 client.on('loading_screen', (percent, message) => {

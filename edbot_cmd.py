@@ -202,32 +202,79 @@ def cmd_messages(sess, accounts):
     if not eleves:
         return 'Aucun élève trouvé.'
     el = eleves[0]
-    eid = str(el.get("id"))
-    payload = {"famille": eid, "eleve": eid}
+    eleve_id = str(el.get("id"))
+
+    # L'API École Directe pour la messagerie du compte parent utilise
+    # l'ID de la FAMILLE (account parent, typeCompte 1 ou 2), pas l'ID élève.
+    famille_id = None
+    if accounts and accounts[0].get("typeCompte") in ("1", "2"):
+        famille_id = str(accounts[0].get("id"))
+    if not famille_id:
+        famille_id = eleve_id  # fallback si pas de compte parent dispo
+
+    # --- DEBUG temporaire ---
+    acc0 = accounts[0] if accounts else {}
+    print(f"[DEBUG cmd_messages] typeCompte={acc0.get('typeCompte')!r} (type={type(acc0.get('typeCompte')).__name__})", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] accounts[0].id={acc0.get('id')!r}", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] famille_id={famille_id} eleve_id={eleve_id} token={sess.token!r}", file=sys.stderr)
+
+    # API réelle (documentée dans API-EcoleDirecte.md) :
+    # POST /v3/familles/{idFamille}/messages.awp?force=false&typeRecuperation=received&...
+    # data = {"anneeMessages": "2026-2027"}
+    # Les messages sont dans data.messages.received[]
+    url = (
+        f"{ED_BASE}/v3/familles/{famille_id}/messages.awp"
+        "?force=false&typeRecuperation=received&idClasseur=0&orderBy=date"
+        "&order=desc&query=&onlyRead=&page=0&itemsPerPage=100&getAll=0&verbe=get&v=4.100.1"
+    )
+    payload = {"anneeMessages": "2026-2027"}
+    body = "data=" + json.dumps(payload)
     try:
         req = urllib.request.Request(
-            f"{ED_BASE}/v3/familles/{eid}/messages.awp",
-            data=json.dumps(payload).encode(),
+            url,
+            data=body.encode(),
             method="POST",
-            headers={"User-Agent": UA, "Origin": "https://www.ecoledirecte.com", "Referer": "https://www.ecoledirecte.com/"}
+            headers={
+                "User-Agent": UA,
+                "Content-Type": "text/plain",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": "https://www.ecoledirecte.com",
+                "Referer": "https://www.ecoledirecte.com/",
+                "X-Token": sess.token or "",
+            },
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
+            raw = resp.read().decode()
+            print(f"[DEBUG cmd_messages] raw API response: {raw[:2000]}", file=sys.stderr)
+            data = json.loads(raw)
     except Exception as e:
         return f'⚠️ Erreur récupération messages : {e}'
-    messages = data.get("messages", [])
-    if not messages:
+
+    # La réponse est : {"code":200, "token":..., "data": {"messages": {"received": [...]}}}
+    data_block = data.get("data") or {}
+    messages_blob = data_block.get("messages") or {}
+    received_list = messages_blob.get("received") or []
+    print(f"[DEBUG cmd_messages] type(data)=dict data_keys={list(data.keys())}", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] nombre de messages reçus: {len(received_list)}", file=sys.stderr)
+    if not received_list:
         return 'Aucun message nouveau.'
-    # Afficher les 5 derniers messages (les plus récents en premier)
+
+    # La liste reçue est déjà triée par date décroissante (plus récent en premier).
+    # On prend simplement les 5 premiers éléments.
     MAX_DISPLAY = 5
-    recent = messages[-MAX_DISPLAY:][::-1]  # prendre les 5 derniers, inverser pour avoir le plus récent d'abord
+    recent = received_list[:MAX_DISPLAY]
     parts = []
-    parts.append("📨 *" + str(len(messages)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*")
+    parts.append(
+        "📨 *" + str(len(received_list)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*"
+    )
     for i, last in enumerate(recent):
         date = last.get("date", "")
-        expediteur = last.get("expediteur", "")
-        corps = last.get("corps", "")
-        entry = "\n\n--- Message " + str(i+1) + " ---\n📅 " + date + "\nDe : " + expediteur + "\n" + corps
+        frm = last.get("from") or {}
+        prenom = str(frm.get("prenom", ""))
+        nom = str(frm.get("nom", ""))
+        expediteur = (f"{frm.get('civilite','')} {prenom} {nom}").strip() or str(frm.get("nom", "inconnu"))
+        subject = last.get("subject", "")
+        entry = "\n\n--- Message " + str(i + 1) + " ---\n📅 " + str(date) + "\nDe : " + expediteur + "\n" + str(subject)
         parts.append(entry)
     result = "".join(parts)
     max_len = 3700
@@ -433,6 +480,7 @@ def main():
         return
 
     status, payload = sess.ensure_logged_in()
+    print(f"[DEBUG cmd_messages] ensure_logged_in -> status={status!r} payload={str(payload)[:200]}", file=sys.stderr)
     if status == 'fige':
         # Cooldown 2FA ou compte bloqué : rien n'est envoyé à ED.
         print(_fige_texte(state))
