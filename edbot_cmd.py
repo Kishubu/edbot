@@ -214,6 +214,9 @@ def cmd_messages(sess, accounts):
 
     payload = {"famille": famille_id, "eleve": eleve_id}
     # --- DEBUG temporaire ---
+    acc0 = accounts[0] if accounts else {}
+    print(f"[DEBUG cmd_messages] typeCompte={acc0.get('typeCompte')!r} (type={type(acc0.get('typeCompte')).__name__})", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] accounts[0].id={acc0.get('id')!r}", file=sys.stderr)
     print(f"[DEBUG cmd_messages] famille_id={famille_id} eleve_id={eleve_id}", file=sys.stderr)
     try:
         req = urllib.request.Request(
