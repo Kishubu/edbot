@@ -213,6 +213,8 @@ def cmd_messages(sess, accounts):
         famille_id = eleve_id  # fallback si pas de compte parent dispo
 
     payload = {"famille": famille_id, "eleve": eleve_id}
+    # --- DEBUG temporaire ---
+    print(f"[DEBUG cmd_messages] famille_id={famille_id} eleve_id={eleve_id}", file=sys.stderr)
     try:
         req = urllib.request.Request(
             f"{ED_BASE}/v3/familles/{famille_id}/messages.awp",
@@ -221,10 +223,13 @@ def cmd_messages(sess, accounts):
             headers={"User-Agent": UA, "Origin": "https://www.ecoledirecte.com", "Referer": "https://www.ecoledirecte.com/"}
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
+            raw = resp.read().decode()
+            print(f"[DEBUG cmd_messages] raw API response: {raw[:2000]}", file=sys.stderr)
+            data = json.loads(raw)
     except Exception as e:
         return f'⚠️ Erreur récupération messages : {e}'
     messages = data.get("messages", [])
+    print(f"[DEBUG cmd_messages] nombre de messages dans la réponse: {len(messages)}", file=sys.stderr)
     if not messages:
         return 'Aucun message nouveau.'
     # Afficher les 5 derniers messages (les plus récents en premier)
