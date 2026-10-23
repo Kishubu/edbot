@@ -228,13 +228,16 @@ def cmd_messages(sess, accounts):
         "&order=desc&query=&onlyRead=&page=0&itemsPerPage=100&getAll=0&verbe=get&v=4.100.1"
     )
     payload = {"anneeMessages": "2026-2027"}
+    body = "data=" + json.dumps(payload)
     try:
         req = urllib.request.Request(
             url,
-            data=json.dumps(payload).encode(),
+            data=body.encode(),
             method="POST",
             headers={
                 "User-Agent": UA,
+                "Content-Type": "text/plain",
+                "X-Requested-With": "XMLHttpRequest",
                 "Origin": "https://www.ecoledirecte.com",
                 "Referer": "https://www.ecoledirecte.com/",
                 "X-Token": sess.token or "",
