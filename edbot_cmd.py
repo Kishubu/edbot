@@ -268,25 +268,12 @@ def cmd_messages(sess, accounts):
     )
     for i, last in enumerate(recent):
         date = last.get("date", "")
-        from_ = last.get("from", "")
+        frm = last.get("from") or {}
+        prenom = str(frm.get("prenom", ""))
+        nom = str(frm.get("nom", ""))
+        expediteur = (f"{frm.get('civilite','')} {prenom} {nom}").strip() or str(frm.get("nom", "inconnu"))
         subject = last.get("subject", "")
-        entry = "\n\n--- Message " + str(i + 1) + " ---\n📅 " + str(date) + "\nDe : " + str(from_) + "\n" + str(subject)
-        parts.append(entry)
-    result = "".join(parts)
-    max_len = 3700
-    if len(result) > max_len:
-        result = result[:max_len] + "\n… (truncated)"
-    return result
-    # Afficher les 5 derniers messages (les plus récents en premier)
-    MAX_DISPLAY = 5
-    recent = messages[-MAX_DISPLAY:][::-1]  # prendre les 5 derniers, inverser pour avoir le plus récent d'abord
-    parts = []
-    parts.append("📨 *" + str(len(messages)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*")
-    for i, last in enumerate(recent):
-        date = last.get("date", "")
-        expediteur = last.get("expediteur", "")
-        corps = last.get("corps", "")
-        entry = "\n\n--- Message " + str(i+1) + " ---\n📅 " + date + "\nDe : " + expediteur + "\n" + corps
+        entry = "\n\n--- Message " + str(i + 1) + " ---\n📅 " + str(date) + "\nDe : " + expediteur + "\n" + str(subject)
         parts.append(entry)
     result = "".join(parts)
     max_len = 3700
