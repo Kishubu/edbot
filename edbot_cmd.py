@@ -485,6 +485,7 @@ def main():
         return
 
     status, payload = sess.ensure_logged_in()
+    print(f"[DEBUG cmd_messages] ensure_logged_in -> status={status!r} payload={str(payload)[:200]}", file=sys.stderr)
     if status == 'fige':
         # Cooldown 2FA ou compte bloqué : rien n'est envoyé à ED.
         print(_fige_texte(state))
