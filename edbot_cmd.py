@@ -215,7 +215,7 @@ def cmd_messages(sess, accounts):
     payload = {"famille": famille_id, "eleve": eleve_id}
     try:
         req = urllib.request.Request(
-            f"{ED_BASE}/v3/familles/{eid}/messages.awp",
+            f"{ED_BASE}/v3/familles/{famille_id}/messages.awp",
             data=json.dumps(payload).encode(),
             method="POST",
             headers={"User-Agent": UA, "Origin": "https://www.ecoledirecte.com", "Referer": "https://www.ecoledirecte.com/"}
