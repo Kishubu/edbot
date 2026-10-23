@@ -250,10 +250,13 @@ def cmd_messages(sess, accounts):
     except Exception as e:
         return f'⚠️ Erreur récupération messages : {e}'
 
-    received = (data.get("messages") or {}).get("received") or []
-    print(f"[DEBUG cmd_messages] type(data)={type(data).__name__} data_keys={list(data.keys()) if isinstance(data, dict) else 'not dict'}", file=sys.stderr)
-    print(f"[DEBUG cmd_messages] nombre de messages reçus: {len(received)}", file=sys.stderr)
-    if not received:
+    # La réponse est : {"code":200, "token":..., "data": {"messages": {"received": [...]}}}
+    data_block = data.get("data") or {}
+    messages_blob = data_block.get("messages") or {}
+    received_list = messages_blob.get("received") or []
+    print(f"[DEBUG cmd_messages] type(data)=dict data_keys={list(data.keys())}", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] nombre de messages reçus: {len(received_list)}", file=sys.stderr)
+    if not received_list:
         return 'Aucun message nouveau.'
 
     # Afficher les 5 derniers messages (les plus récents en premier)
