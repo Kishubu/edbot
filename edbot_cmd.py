@@ -259,9 +259,10 @@ def cmd_messages(sess, accounts):
     if not received_list:
         return 'Aucun message nouveau.'
 
-    # Afficher les 5 derniers messages (les plus récents en premier)
+    # La liste reçue est déjà triée par date décroissante (plus récent en premier).
+    # On prend simplement les 5 premiers éléments.
     MAX_DISPLAY = 5
-    recent = received_list[-MAX_DISPLAY:][::-1]
+    recent = received_list[:MAX_DISPLAY]
     parts = []
     parts.append(
         "📨 *" + str(len(received_list)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*"

@@ -174,6 +174,14 @@ client.on('message_create', async (msg) => {
         return;
     }
 
+    // Indiquer que le bot est en train d'ecrire (prise en compte du message)
+    try {
+        const chat = await msg.getChat();
+        await chat.sendStateTyping();
+    } catch (e) {
+        console.error('[WA] Erreur envoi etat typing :', e && e.message ? e.message : e);
+    }
+
     // --- Commande directe !xxx (comportement existant) ---
     if (text.startsWith('!')) {
         const parsed = parseCommand(text);
