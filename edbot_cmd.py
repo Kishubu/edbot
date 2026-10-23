@@ -251,6 +251,7 @@ def cmd_messages(sess, accounts):
         return f'⚠️ Erreur récupération messages : {e}'
 
     received = (data.get("messages") or {}).get("received") or []
+    print(f"[DEBUG cmd_messages] type(data)={type(data).__name__} data_keys={list(data.keys()) if isinstance(data, dict) else 'not dict'}", file=sys.stderr)
     print(f"[DEBUG cmd_messages] nombre de messages reçus: {len(received)}", file=sys.stderr)
     if not received:
         return 'Aucun message nouveau.'
