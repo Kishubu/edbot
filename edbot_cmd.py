@@ -202,8 +202,17 @@ def cmd_messages(sess, accounts):
     if not eleves:
         return 'Aucun élève trouvé.'
     el = eleves[0]
-    eid = str(el.get("id"))
-    payload = {"famille": eid, "eleve": eid}
+    eleve_id = str(el.get("id"))
+
+    # L'API attend l'ID de la FAMILLE (compte parent, typeCompte 1 ou 2),
+    # distinct de l'ID de l'élève. On extrait le compte parent depuis `accounts`.
+    famille_id = None
+    if accounts and accounts[0].get("typeCompte") in ("1", "2"):
+        famille_id = str(accounts[0].get("id"))
+    if not famille_id:
+        famille_id = eleve_id  # fallback si pas de compte parent dispo
+
+    payload = {"famille": famille_id, "eleve": eleve_id}
     try:
         req = urllib.request.Request(
             f"{ED_BASE}/v3/familles/{eid}/messages.awp",
