@@ -204,26 +204,41 @@ def cmd_messages(sess, accounts):
     el = eleves[0]
     eleve_id = str(el.get("id"))
 
-    # L'API attend l'ID de la FAMILLE (compte parent, typeCompte 1 ou 2),
-    # distinct de l'ID de l'élève. On extrait le compte parent depuis `accounts`.
+    # L'API École Directe pour la messagerie du compte parent utilise
+    # l'ID de la FAMILLE (account parent, typeCompte 1 ou 2), pas l'ID élève.
     famille_id = None
     if accounts and accounts[0].get("typeCompte") in ("1", "2"):
         famille_id = str(accounts[0].get("id"))
     if not famille_id:
         famille_id = eleve_id  # fallback si pas de compte parent dispo
 
-    payload = {"famille": famille_id, "eleve": eleve_id}
     # --- DEBUG temporaire ---
     acc0 = accounts[0] if accounts else {}
     print(f"[DEBUG cmd_messages] typeCompte={acc0.get('typeCompte')!r} (type={type(acc0.get('typeCompte')).__name__})", file=sys.stderr)
     print(f"[DEBUG cmd_messages] accounts[0].id={acc0.get('id')!r}", file=sys.stderr)
-    print(f"[DEBUG cmd_messages] famille_id={famille_id} eleve_id={eleve_id}", file=sys.stderr)
+    print(f"[DEBUG cmd_messages] famille_id={famille_id} eleve_id={eleve_id} token={sess.token!r}", file=sys.stderr)
+
+    # API réelle (documentée dans API-EcoleDirecte.md) :
+    # POST /v3/familles/{idFamille}/messages.awp?force=false&typeRecuperation=received&...
+    # data = {"anneeMessages": "2026-2027"}
+    # Les messages sont dans data.messages.received[]
+    url = (
+        f"{ED_BASE}/v3/familles/{famille_id}/messages.awp"
+        "?force=false&typeRecuperation=received&idClasseur=0&orderBy=date"
+        "&order=desc&query=&onlyRead=&page=0&itemsPerPage=100&getAll=0&verbe=get&v=4.100.1"
+    )
+    payload = {"anneeMessages": "2026-2027"}
     try:
         req = urllib.request.Request(
-            f"{ED_BASE}/v3/familles/{famille_id}/messages.awp",
+            url,
             data=json.dumps(payload).encode(),
             method="POST",
-            headers={"User-Agent": UA, "Origin": "https://www.ecoledirecte.com", "Referer": "https://www.ecoledirecte.com/"}
+            headers={
+                "User-Agent": UA,
+                "Origin": "https://www.ecoledirecte.com",
+                "Referer": "https://www.ecoledirecte.com/",
+                "X-Token": sess.token or "",
+            },
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode()
@@ -231,10 +246,30 @@ def cmd_messages(sess, accounts):
             data = json.loads(raw)
     except Exception as e:
         return f'⚠️ Erreur récupération messages : {e}'
-    messages = data.get("messages", [])
-    print(f"[DEBUG cmd_messages] nombre de messages dans la réponse: {len(messages)}", file=sys.stderr)
-    if not messages:
+
+    received = (data.get("messages") or {}).get("received") or []
+    print(f"[DEBUG cmd_messages] nombre de messages reçus: {len(received)}", file=sys.stderr)
+    if not received:
         return 'Aucun message nouveau.'
+
+    # Afficher les 5 derniers messages (les plus récents en premier)
+    MAX_DISPLAY = 5
+    recent = received[-MAX_DISPLAY:][::-1]
+    parts = []
+    parts.append(
+        "📨 *" + str(len(received)) + " message(s) au total - affichage des " + str(len(recent)) + " plus récents*"
+    )
+    for i, last in enumerate(recent):
+        date = last.get("date", "")
+        from_ = last.get("from", "")
+        subject = last.get("subject", "")
+        entry = "\n\n--- Message " + str(i + 1) + " ---\n📅 " + str(date) + "\nDe : " + str(from_) + "\n" + str(subject)
+        parts.append(entry)
+    result = "".join(parts)
+    max_len = 3700
+    if len(result) > max_len:
+        result = result[:max_len] + "\n… (truncated)"
+    return result
     # Afficher les 5 derniers messages (les plus récents en premier)
     MAX_DISPLAY = 5
     recent = messages[-MAX_DISPLAY:][::-1]  # prendre les 5 derniers, inverser pour avoir le plus récent d'abord
