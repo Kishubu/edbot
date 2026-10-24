@@ -478,6 +478,24 @@ class EDSession:
             return None
         return body.get("data", {})
 
+    def fetch_emploi_du_temps(self, eleve_id):
+        body = self.post(
+            f"/v3/E/{eleve_id}/emploidutemps.awp?verbe=get&v={ED_VERSION}",
+            {}, token=self.token)
+        self.token = body.get("token") or self.token
+        if body.get("code") != 200:
+            return None
+        return body.get("data", [])
+
+    def fetch_cahier_de_texte(self, eleve_id):
+        body = self.post(
+            f"/v3/Eleves/{eleve_id}/cahierdetexte.awp?verbe=get&v={ED_VERSION}",
+            {}, token=self.token)
+        self.token = body.get("token") or self.token
+        if body.get("code") != 200:
+            return None
+        return body.get("data", {})
+
 
 def _b64d(s):
     return base64.b64decode(s).decode("utf-8", "replace") if s else ""
@@ -573,8 +591,7 @@ def fmt_note_line(n):
     return (f"<b>{html.escape(str(n.get('libelleMatiere','')))}</b> : "
             f"{html.escape(str(n.get('valeur','')))}/"
             f"{html.escape(str(n.get('noteSur','')))} "
-            f"(coef {html.escape(str(n.get('coef','')))})"
-            f"\n<i>{html.escape(str(n.get('devoir','')))}</i> — "
+            f"(coef {html.escape(str(n.get('coef','')))}) — "
             f"{html.escape(str(n.get('date','')))}")
 
 
@@ -588,6 +605,93 @@ def fmt_recent(eleve, data, limit=10):
     out = [f"<b>🆕 {html.escape(prenom)} — {len(notes)} dernières notes</b>"]
     for n in notes:
         out.append("\n" + fmt_note_line(n))
+    return "\n".join(out)
+
+
+def _fmt_date_fr(iso):
+    """Convertit '2026-10-20 08:30:00' -> '20/10/2026 08:30'."""
+    if not iso:
+        return ''
+    s = str(iso)
+    d = s[:10]
+    t = s[11:16] if len(s) > 10 else ''
+    parts = d.split('-')
+    if len(parts) == 3:
+        d = f"{parts[2]}/{parts[1]}/{parts[0]}"
+    return f"{d} {t}".strip() if t else d
+
+
+def fmt_emploi_du_temps(eleve, data):
+    """Formate l'emploi du temps par jour, trié par heure."""
+    prenom = eleve.get("prenom", "?")
+    if not data:
+        return f"<b>📅 {html.escape(prenom)}</b> : aucun emploi du temps disponible."
+    # Regrouper par date de début
+    days = {}
+    for ev in data:
+        start = ev.get("start_date", "")
+        day = start[:10] if start else "?"
+        days.setdefault(day, []).append(ev)
+    out = [f"<b>📅 {html.escape(prenom)} — Emploi du temps</b>"]
+    for day in sorted(days.keys()):
+        events = sorted(days[day], key=lambda e: e.get("start_date", ""))
+        d_parts = day.split("-")
+        day_fr = f"{d_parts[2]}/{d_parts[1]}/{d_parts[0]}" if len(d_parts) == 3 else day
+        out.append(f"\n<b>{day_fr}</b>")
+        for ev in events:
+            start = ev.get("start_date", "")
+            t = start[11:16] if len(start) > 10 else ""
+            matiere = html.escape(str(ev.get("matiere", "")))
+            prof = html.escape(str(ev.get("prof", "")))
+            salle = html.escape(str(ev.get("salle", "")))
+            ligne = f"  {t} — {matiere}"
+            if prof:
+                ligne += f" ({prof})"
+            if salle:
+                ligne += f" — Salle {salle}"
+            out.append(ligne)
+    return "\n".join(out)
+
+
+def fmt_cahier_de_texte(eleve, data):
+    """Formate le cahier de texte (devoirs) par date de rendu."""
+    prenom = eleve.get("prenom", "?")
+    if not data:
+        return f"<b>📋 {html.escape(prenom)}</b> : aucun devoir trouvé."
+    # data est un objet { date: [devoirs...] }
+    all_assignments = []
+    for date_key, assignments in data.items():
+        if not isinstance(assignments, list):
+            continue
+        for a in assignments:
+            all_assignments.append((date_key, a))
+    # Trier par date de rendu (end_date / dueDate / dateFin)
+    def _due(a):
+        return (a.get("end_date") or a.get("dueDate") or a.get("dateFin") or
+                a.get("dateRendu") or "")
+    all_assignments.sort(key=lambda x: _due(x[1]))
+    out = [f"<b>📋 {html.escape(prenom)} — Devoirs (cahier de texte)</b>"]
+    for date_key, a in all_assignments:
+        matiere = html.escape(str(a.get("matiere", a.get("subject", "?"))))
+        libelle = html.escape(str(a.get("text", a.get("libelle", a.get("contenu", "")))))
+        due = (a.get("end_date") or a.get("dueDate") or a.get("dateFin") or
+               a.get("dateRendu") or date_key)
+        due_fr = _fmt_date_fr(due)
+        completed = (a.get("completed", False) or a.get("fait", False) or
+                     a.get("termine", False) or a.get("dispense", False))
+        status = "✅ Fait" if completed else "❌ Non fait"
+        ligne = f"\n<b>{matiere}</b>"
+        if libelle:
+            ligne += f" — {libelle}"
+        ligne += f"\n  À rendre le : {due_fr}"
+        ligne += f"\n  {status}"
+        # Pièces jointes
+        docs = a.get("documents", [])
+        if docs:
+            ligne += f"\n  📎 Pièce(s) jointe(s): {len(docs)}"
+        out.append(ligne)
+    if len(all_assignments) == 0:
+        out.append("\nAucun devoir à afficher.")
     return "\n".join(out)
 
 

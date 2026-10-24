@@ -48,7 +48,7 @@ EDBOT_CMD = os.path.join(HERE, "edbot_cmd.py")
 ATTEND_2FA_PREFIX = "__EDAGENT_ATTEND_2FA__"
 
 # Commandes qui peuvent declencher une 2FA et donc etre rejouees apres.
-REPLAYABLE_CMDS = ("notes", "recent", "check", "sync", "messages")
+REPLAYABLE_CMDS = ("notes", "recent", "check", "sync", "messages", "agenda", "devoirs")
 
 
 def load_state():
@@ -71,6 +71,8 @@ def build_system_prompt():
         "- recent : afficher les dernieres notes\n"
         "- check : verifier immediatement s'il y a de nouvelles notes\n"
         "- sync : archiver les nouveaux documents (bulletins, factures, etc.)\n"
+        "- agenda : afficher l'emploi du temps de la semaine\n"
+        "- devoirs : afficher le cahier de texte (devoirs à rendre)\n"
         "- messages : afficher les derniers messages EcoleDirecte\n"
         "- 2fa : repondre a une question de verification de securite (numero de proposition)\n"
         "- help : afficher l'aide avec la liste des commandes\n\n"

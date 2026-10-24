@@ -10,6 +10,8 @@ Commandes disponibles :
   recent   — 10 dernières notes
   check    — forcer une vérification immédiate des nouvelles notes
   sync     — archiver les nouveaux documents (bulletins, factures, etc.)
+  agenda   — emploi du temps de la semaine
+  devoirs  — cahier de texte (devoirs à rendre)
 
 Ce module importe `edbot` (logique métier existante) et réutilise
 `EDSession` pour se connecter à l'API École Directe. Aucun envoi Telegram
@@ -185,6 +187,8 @@ HELP_TEXT = (
     '(confirmation exigée : *!2fa <n> confirm*)\n'
     '*!2fa reset* — réarmer la vérification de sécurité '
     '(après déblocage manuel du compte ED)'
+    '*!agenda* — emploi du temps de la semaine\n'
+    '*!devoirs* — cahier de texte (devoirs à rendre)\n'
     '*!messages* — dernier message EcoleDirecte\\n'
 )
 
@@ -281,6 +285,40 @@ def cmd_messages(sess, accounts):
     if len(result) > max_len:
         result = result[:max_len] + "\n… (truncated)"
     return result
+
+
+def cmd_agenda(sess, accounts):
+    """Retourne l'emploi du temps pour tous les élèves."""
+    eleves = ed.eleves_from_accounts(accounts)
+    if not eleves:
+        return 'Aucun élève trouvé.'
+
+    lines = []
+    for el in eleves:
+        data = sess.fetch_emploi_du_temps(el.get('id'))
+        if not data:
+            lines.append(f'Emploi du temps indisponible pour {el.get("prenom", "?")}.')
+            continue
+        lines.append(strip_html(ed.fmt_emploi_du_temps(el, data)))
+
+    return '\n\n'.join(lines)
+
+
+def cmd_devoirs(sess, accounts):
+    """Retourne le cahier de texte (devoirs) pour tous les élèves."""
+    eleves = ed.eleves_from_accounts(accounts)
+    if not eleves:
+        return 'Aucun élève trouvé.'
+
+    lines = []
+    for el in eleves:
+        data = sess.fetch_cahier_de_texte(el.get('id'))
+        if not data:
+            lines.append(f'Cahier de texte indisponible pour {el.get("prenom", "?")}.')
+            continue
+        lines.append(strip_html(ed.fmt_cahier_de_texte(el, data)))
+
+    return '\n\n'.join(lines)
 
 
 def _duree(secs):
@@ -418,6 +456,10 @@ def cmd_2fa(sess, state, index, action=None):
         body = cmd_check(sess, accounts)
     elif resume_cmd == 'sync':
         body = cmd_sync(sess, accounts)
+    elif resume_cmd == 'agenda':
+        body = cmd_agenda(sess, accounts)
+    elif resume_cmd == 'devoirs':
+        body = cmd_devoirs(sess, accounts)
     else:
         body = '✅ Vérification réussie.'
 
@@ -492,7 +534,7 @@ def main():
             'question': payload['question'],
             'propositions': payload['propositions'],
             'token': payload['token'],
-            'command': cmd if cmd in ('notes', 'moyennes', 'recent', 'check', 'sync') else 'notes',
+            'command': cmd if cmd in ('notes', 'moyennes', 'recent', 'check', 'sync', 'agenda', 'devoirs') else 'notes',
         }
         ed.save_state(state)
         lignes = ['🔐 *Vérification de sécurité École Directe*', '',
@@ -534,6 +576,10 @@ def main():
         result = cmd_check(sess, accounts)
     elif cmd == 'sync':
         result = cmd_sync(sess, accounts)
+    elif cmd == 'agenda':
+        result = cmd_agenda(sess, accounts)
+    elif cmd == 'devoirs':
+        result = cmd_devoirs(sess, accounts)
     elif cmd in ('help', '--help', '-h'):
         result = HELP_TEXT
     else:

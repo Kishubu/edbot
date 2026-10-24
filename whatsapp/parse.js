@@ -9,7 +9,7 @@
  * déblocage manuel du compte École Directe.
  */
 
-const VALID_CMDS = ['notes', 'moyennes', 'recent', 'check', 'sync', 'help', '2fa', 'messages'];
+const VALID_CMDS = ['notes', 'moyennes', 'recent', 'check', 'sync', 'agenda', 'devoirs', 'help', '2fa', 'messages'];
 const VALID_2FA_ACTIONS = ['confirm', 'cancel'];
 
 /**

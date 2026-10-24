@@ -10,6 +10,8 @@ Le bot WhatsApp (via `whatsapp/index.js` + `docker-compose.yml`) reçoit les com
 - `!moyennes` — Moyennes par matière
 - `!recent` — 10 dernières notes
 - `!check` — Force une vérification immédiate des notes
+- `!agenda` — Affiche l'emploi du temps de la semaine
+- `!devoirs` — Affiche le cahier de texte (devoirs à rendre)
 - `!messages` — Affiche le dernier message EcoleDirecte (API /messages.awp)
 - `!sync` — Archive les nouveaux documents
 
@@ -40,7 +42,7 @@ Edbot peut recevoir des requêtes en langage naturel sur WhatsApp, sans préfixe
 - _"Ma moyenne en espagnol ?"_
 - _"Bonjour"_
 
-L'agent LLM (via Venice.ai, modèle `nvidia-nemotron-3-nano-30b-a3b`) traduit l'intention en commande `edbot_cmd.py` correspondante (`notes`, `moyennes`, `recent`, `check`, `sync`, `messages`) et reformule la réponse en français naturel.
+L'agent LLM (via Venice.ai, modèle `nvidia-nemotron-3-nano-30b-a3b`) traduit l'intention en commande `edbot_cmd.py` correspondante (`notes`, `moyennes`, `recent`, `check`, `sync`, `agenda`, `devoirs`, `messages`) et reformule la réponse en français naturel.
 
 ### Configuration
 
