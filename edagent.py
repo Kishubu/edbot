@@ -6,7 +6,7 @@ Principes :
 - Recoit un texte utilisateur en langage naturel (ex: "Quel est ma derniere
   note en math ?").
 - Interroge le LLM Venice.ai pour traduire l'intention en commande
-  edbot_cmd.py (notes, moyennes, recent, check, sync, messages, 2fa, help).
+  edbot_cmd.py (notes, recent, check, sync, messages, 2fa, help).
 - Le LLM repond avec un JSON structure : { cmd, args, reponse_utilisateur,
   attend_saisie_utilisateur }.
 - Si le LLM demande une commande, edagent lance edbot_cmd.py via subprocess
@@ -48,7 +48,7 @@ EDBOT_CMD = os.path.join(HERE, "edbot_cmd.py")
 ATTEND_2FA_PREFIX = "__EDAGENT_ATTEND_2FA__"
 
 # Commandes qui peuvent declencher une 2FA et donc etre rejouees apres.
-REPLAYABLE_CMDS = ("notes", "moyennes", "recent", "check", "sync", "messages")
+REPLAYABLE_CMDS = ("notes", "recent", "check", "sync", "messages")
 
 
 def load_state():
@@ -66,7 +66,14 @@ def build_system_prompt():
         "L'utilisateur t'ecrit en francais en langage naturel. "
         "Ton but est de traduire son intention en une des commandes suivantes "
         "et de repondre en francais de maniere naturelle et concise.\n\n"
-        "Commandes disponibles : notes, moyennes, recent, check, sync, messages, 2fa, help.\n"
+        "Commandes disponibles :\n"
+        "- notes : afficher les moyennes et dernieres notes d'un eleve\n"
+        "- recent : afficher les dernieres notes\n"
+        "- check : verifier immediatement s'il y a de nouvelles notes\n"
+        "- sync : archiver les nouveaux documents (bulletins, factures, etc.)\n"
+        "- messages : afficher les derniers messages EcoleDirecte\n"
+        "- 2fa : repondre a une question de verification de securite (numero de proposition)\n"
+        "- help : afficher l'aide avec la liste des commandes\n\n"
         "Si aucune action precise n'est demandee, reponds directement sans commande (cmd: null).\n"
         "Reponds avec un JSON valide uniquement : {\"cmd\": ..., \"args\": [], \"reponse_utilisateur\": \"...\"}.\n"
     )
